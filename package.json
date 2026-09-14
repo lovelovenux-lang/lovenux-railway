@@ -1,0 +1,36 @@
+{
+  "name": "lovenux2-1B",
+  "version": "2.0.0-1B-IGAZI",
+  "description": "Lovenux - EREDETI IGAZI - 1 milliárd regisztrációig skálázható - sharded Postgres + Redis + S3",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "start:1B": "SHARD_COUNT=16 node server-1B.js",
+    "dev": "nodemon server-1B.js",
+    "init:db": "node scripts/init-db.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "dotenv": "^16.4.5",
+    "express-rate-limit": "^7.2.0",
+    "compression": "^1.7.4",
+    "morgan": "^1.10.0",
+    "pg": "^8.11.3",
+    "ioredis": "^5.3.2",
+    "bullmq": "^5.4.0",
+    "sharp": "^0.33.3",
+    "nodemailer": "^6.9.13",
+    "node-fetch": "^3.3.2"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-s3": "^3.540.0"
+  }
+}
