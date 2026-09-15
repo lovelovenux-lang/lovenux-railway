@@ -329,13 +329,29 @@ app.post('/api/admin/login', async(req,res)=>{
 });
 
 app.get('*',(req,res)=>{
-  const idx=path.join(__dirname,'public','index.html');
-  if(require('fs').existsSync(idx)) return res.sendFile(idx);
-  res.send('Lovenux GENDER LIVE');
+  const candidates=[
+    path.join(__dirname,'public','index.html'),
+    path.join(__dirname,'index.html'),
+    path.join(process.cwd(),'public','index.html'),
+    path.join(process.cwd(),'index.html'),
+    '/opt/render/project/src/public/index.html',
+    '/opt/render/project/src/index.html'
+  ];
+  for(let p of candidates){
+    if(fs.existsSync(p)){
+      console.log('✅ Serving',p,'for',req.path);
+      return res.sendFile(p);
+    }
+  }
+  // Last resort - return dark html directly
+  try{
+    const fb=path.join(__dirname,'public','index.html');
+    if(fs.existsSync(fb)) return res.send(fs.readFileSync(fb,'utf8'));
+  }catch(_){}
+  res.send('Lovenux GENDER LIVE - index.html not found, check public folder!');
 });
 
 (async()=>{
   if(DB_MODE==='SHARDED'){ try{ await initPG(); }catch(e){ console.error('PG fail',e.message); DB_MODE='JSON'; dbCache=loadDB(); } }
   app.listen(PORT,()=>console.log(`Lovenux GENDER fut:${PORT} MODE:${DB_MODE}`));
 })();
-
