@@ -11,11 +11,9 @@ const fs = require('fs');
 const crypto = require('crypto');
 const compression = require('compression');
 const morgan = require('morgan');
-const http = require('http');
-const { Server } = require('socket.io');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const JWT_SECRET = process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME';
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'robi19920508@gmail.com').toLowerCase();
 const DATA_DIR = path.join(__dirname, 'data');
@@ -23,7 +21,7 @@ const UPLOAD_DIR = path.join(__dirname, 'public/uploads');
 const SHARD_COUNT = parseInt(process.env.SHARD_COUNT || '16', 10);
 const DATABASE_URLS = (process.env.DATABASE_URLS || process.env.DATABASE_URL || '').split(',').map(s=>s.trim()).filter(Boolean);
 let DB_MODE = DATABASE_URLS.length > 0 ? 'SHARDED' : 'JSON';
-console.log(`Lovenux INSTANT Mode: ${DB_MODE}`);
+console.log(`Lovenux STABLE Mode: ${DB_MODE} | Port ${PORT}`);
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, {recursive:true});
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, {recursive:true});
@@ -45,7 +43,7 @@ const DATA_FILE=path.join(DATA_DIR,'db.json');
 let dbCache=null;
 function loadDB(){ try{ if(!fs.existsSync(DATA_FILE)){ const init={users:[],payments:[],likes:[],matches:[],messages:[]}; fs.writeFileSync(DATA_FILE,JSON.stringify(init)); return init; } return JSON.parse(fs.readFileSync(DATA_FILE,'utf8')); }catch(_){ return {users:[],payments:[],likes:[],matches:[],messages:[]}; } }
 function saveDB(db){ try{ fs.writeFileSync(DATA_FILE+'.tmp',JSON.stringify(db)); fs.renameSync(DATA_FILE+'.tmp',DATA_FILE); dbCache=db; }catch(_){} }
-if(DB_MODE==='JSON'){ dbCache=loadDB(); setInterval(()=>{ if(dbCache) saveDB(dbCache); },8000); }
+if(DB_MODE==='JSON'){ dbCache=loadDB(); setInterval(()=>{ if(dbCache) saveDB(dbCache); },15000); }
 app.use(helmet({contentSecurityPolicy:false}));
 app.use(compression());
 app.use(morgan('dev'));
@@ -142,33 +140,23 @@ app.get('/api/messages/:email', auth, async(req,res)=>{
     if(DB_MODE==='JSON'){ const msgs=(dbCache.messages||[]).filter(m=>(m.from===me&&m.to===other)||(m.from===other&&m.to===me)).sort((a,b)=>new Date(a.at)-new Date(b.at)); return res.json(msgs); } else { let all=[]; for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM messages_${i} WHERE (from_email=$1 AND to_email=$2) OR (from_email=$2 AND to_email=$1) ORDER BY at ASC`,[me,other]); all.push(...r.rows.map(row=>({from:row.from_email,to:row.to_email,text:row.text,at:row.at}))); }catch(_){} } all.sort((a,b)=>new Date(a.at)-new Date(b.at)); res.json(all); }
   }catch(e){ res.status(500).json({error:e.message}); }
 });
-let io; let onlineUsers=new Map();
-function emitInstantMessage(msg){ try{ if(!io) return; io.to(msg.to).emit('newMessage', msg); io.to(msg.from).emit('newMessage', msg); }catch(e){ console.error('WS emit', e.message); } }
 app.post('/api/messages', auth, async(req,res)=>{
   try{
     const me=req.user.email.toLowerCase(); const {to,text}=req.body; if(!to||!text) return res.status(400).json({error:'Hiányzik'}); const other=to.toLowerCase();
     const newMsg={from:me,to:other,text,at:new Date().toISOString()};
-    if(DB_MODE==='JSON'){ dbCache.messages=dbCache.messages||[]; dbCache.messages.push(newMsg); saveDB(dbCache); emitInstantMessage(newMsg); return res.json({success:true,message:newMsg}); } else { const shard=getShardIndex(me); const pool=pgPools[shard%pgPools.length]; await pool.query(`INSERT INTO messages_${shard}(from_email,to_email,text) VALUES($1,$2,$3)`,[me,other,text]); emitInstantMessage(newMsg); return res.json({success:true,message:newMsg}); }
+    if(DB_MODE==='JSON'){ dbCache.messages=dbCache.messages||[]; dbCache.messages.push(newMsg); saveDB(dbCache); return res.json({success:true,message:newMsg}); } else { const shard=getShardIndex(me); const pool=pgPools[shard%pgPools.length]; await pool.query(`INSERT INTO messages_${shard}(from_email,to_email,text) VALUES($1,$2,$3)`,[me,other,text]); return res.json({success:true,message:newMsg}); }
   }catch(e){ res.status(500).json({error:e.message}); }
 });
-app.get('/api/heart', (req,res)=>res.json({ok:true,mode:DB_MODE,shards:SHARD_COUNT,ws:!!io}));
+app.get('/api/heart', (req,res)=>res.json({ok:true,mode:DB_MODE,shards:SHARD_COUNT}));
 app.post('/api/admin/login', async(req,res)=>{
   const {email,password}=req.body; const adminEmail = (process.env.ADMIN_EMAIL || 'robi19920508@gmail.com').toLowerCase(); if(email.toLowerCase()!==adminEmail) return res.status(403).json({error:'Nem admin'}); const adminPass=process.env.ADMIN_PASS||'LovenuxAdmin2026!'; if(password!==adminPass) return res.status(400).json({error:'Hibás jelszó'}); const token=jwt.sign({email:email.toLowerCase(),role:'admin'},JWT_SECRET,{expiresIn:'12h'}); res.json({success:true,token});
 });
 app.get('*',(req,res)=>{
   const candidates=[path.join(__dirname,'public','index.html'),path.join(__dirname,'index.html'),path.join(process.cwd(),'public','index.html'),path.join(process.cwd(),'index.html'),'/opt/render/project/src/public/index.html','/opt/render/project/src/index.html'];
-  for(let p of candidates){ if(fs.existsSync(p)){ console.log('✅ Serving',p,'for',req.path); return res.sendFile(p); } }
-  try{ const fb=path.join(__dirname,'public','index.html'); if(fs.existsSync(fb)) return res.send(fs.readFileSync(fb,'utf8')); }catch(_){} res.send('Lovenux INSTANT LIVE');
-});
-const httpServer = http.createServer(app);
-io = new Server(httpServer, { cors: { origin: true, credentials: true } });
-io.on('connection', (socket)=>{
-  const email = (socket.handshake.auth?.email || socket.handshake.query?.email || '').toLowerCase();
-  if(email){ socket.join(email); onlineUsers.set(email, socket.id); console.log('WS connect', email); }
-  socket.on('join', (em)=>{ const e=(em||'').toLowerCase(); if(e){ socket.join(e); onlineUsers.set(e, socket.id); } });
-  socket.on('disconnect', ()=>{ for(let [em,sid] of onlineUsers){ if(sid===socket.id) { onlineUsers.delete(em); break; } } });
+  for(let p of candidates){ if(fs.existsSync(p)){ return res.sendFile(p); } }
+  try{ const fb=path.join(__dirname,'public','index.html'); if(fs.existsSync(fb)) return res.send(fs.readFileSync(fb,'utf8')); }catch(_){} res.send('Lovenux STABLE LIVE');
 });
 (async()=>{
   if(DB_MODE==='SHARDED'){ try{ await initPG(); }catch(e){ console.error('PG fail',e.message); DB_MODE='JSON'; dbCache=loadDB(); } }
-  httpServer.listen(PORT,()=>console.log(`Lovenux INSTANT fut:${PORT} MODE:${DB_MODE}`));
+  app.listen(PORT,()=>console.log(`Lovenux STABLE fut:${PORT} MODE:${DB_MODE}`));
 })();
