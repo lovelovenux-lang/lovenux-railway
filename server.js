@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -10,48 +11,44 @@ const fs = require('fs');
 const crypto = require('crypto');
 const compression = require('compression');
 const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME';
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'love.lovenux@gmail.com').toLowerCase();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'robi19920508@gmail.com').toLowerCase();
 const DATA_DIR = path.join(__dirname, 'data');
 const UPLOAD_DIR = path.join(__dirname, 'public/uploads');
 
 const SHARD_COUNT = parseInt(process.env.SHARD_COUNT || '16', 10);
 const DATABASE_URLS = (process.env.DATABASE_URLS || process.env.DATABASE_URL || '').split(',').map(s=>s.trim()).filter(Boolean);
 let DB_MODE = DATABASE_URLS.length > 0 ? 'SHARDED' : 'JSON';
-console.log(`💘 Lovenux 1B Mode: ${DB_MODE} | Shards: ${SHARD_COUNT}`);
+console.log(`Lovenux GENDER 1B Mode: ${DB_MODE} | Shards: ${SHARD_COUNT}`);
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, {recursive:true});
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, {recursive:true});
 
-function hashEmail(email){
-  const h = crypto.createHash('md5').update(email.toLowerCase()).digest('hex');
-  return parseInt(h.slice(0,8),16) % SHARD_COUNT;
-}
+function hashEmail(email){ const h=crypto.createHash('md5').update(email.toLowerCase()).digest('hex'); return parseInt(h.slice(0,8),16)%SHARD_COUNT; }
 function getShardIndex(email){ return hashEmail(email); }
 
-let pgPools = [];
+let pgPools=[];
 async function initPG(){
   if(DB_MODE!=='SHARDED') return;
-  const { Pool } = require('pg');
-  pgPools = DATABASE_URLS.map((url,i)=>{
-    const actualUrl = DATABASE_URLS[i] || DATABASE_URLS[0];
-    return new Pool({ connectionString: actualUrl, max: 20, idleTimeoutMillis: 30000 });
-  });
-  for(let i=0;i<Math.min(SHARD_COUNT, pgPools.length || SHARD_COUNT); i++){
-    const pool = pgPools[i % pgPools.length];
+  const {Pool}=require('pg');
+  pgPools=DATABASE_URLS.map(u=>new Pool({connectionString:u,max:20}));
+  for(let i=0;i<SHARD_COUNT;i++){
+    const pool=pgPools[i%pgPools.length];
     try{
       await pool.query(`
-        CREATE TABLE IF NOT EXISTS users_${i} (
+        CREATE TABLE IF NOT EXISTS users_${i}(
           id BIGSERIAL PRIMARY KEY,
           email TEXT UNIQUE NOT NULL,
           password TEXT NOT NULL,
+          name TEXT,
           city TEXT,
           birth DATE,
           age INT,
+          gender TEXT DEFAULT 'ferfi',
+          looking_for TEXT DEFAULT 'noket',
           child TEXT,
           bio TEXT,
           photos JSONB DEFAULT '[]',
@@ -61,305 +58,284 @@ async function initPG(){
           created_at TIMESTAMPTZ DEFAULT NOW(),
           last_active TIMESTAMPTZ DEFAULT NOW()
         );
-        CREATE INDEX IF NOT EXISTS idx_users_${i}_email ON users_${i}(email);
-        CREATE TABLE IF NOT EXISTS payments_${i} (
-          id BIGSERIAL PRIMARY KEY,
-          payment_id TEXT UNIQUE NOT NULL,
-          user_id BIGINT NOT NULL,
-          email TEXT NOT NULL,
-          amount INT DEFAULT 1000,
-          status TEXT DEFAULT 'Prepared',
-          gateway_url TEXT,
-          created_at TIMESTAMPTZ DEFAULT NOW(),
-          succeeded_at TIMESTAMPTZ
-        );
+        CREATE TABLE IF NOT EXISTS payments_${i}(id BIGSERIAL PRIMARY KEY,payment_id TEXT UNIQUE,email TEXT,amount INT DEFAULT 1000,status TEXT DEFAULT 'Prepared',created_at TIMESTAMPTZ DEFAULT NOW(),succeeded_at TIMESTAMPTZ);
+        CREATE TABLE IF NOT EXISTS likes_${i}(id BIGSERIAL PRIMARY KEY,from_email TEXT,to_email TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(from_email,to_email));
+        CREATE TABLE IF NOT EXISTS matches_${i}(id BIGSERIAL PRIMARY KEY,user1 TEXT,user2 TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(user1,user2));
+        CREATE TABLE IF NOT EXISTS messages_${i}(id BIGSERIAL PRIMARY KEY,from_email TEXT,to_email TEXT,text TEXT,at TIMESTAMPTZ DEFAULT NOW());
       `);
-    }catch(e){ console.error(`Shard ${i} init error:`, e.message); }
+      try{ await pool.query(`ALTER TABLE users_${i} ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT 'ferfi'`); await pool.query(`ALTER TABLE users_${i} ADD COLUMN IF NOT EXISTS looking_for TEXT DEFAULT 'noket'`); await pool.query(`ALTER TABLE users_${i} ADD COLUMN IF NOT EXISTS name TEXT`);}catch(_){}
+    }catch(e){ console.error(e.message); }
   }
 }
 
-const DATA_FILE = path.join(DATA_DIR, 'db.json');
-let dbCache = null;
-let saveLock = false;
-function loadDB(){
-  try{
-    if(!fs.existsSync(DATA_FILE)){
-      const init = {users:[], payments:[], likes:[], matches:[], reports:[], blocks:[], messages:[]};
-      fs.writeFileSync(DATA_FILE, JSON.stringify(init));
-      return init;
-    }
-    return JSON.parse(fs.readFileSync(DATA_FILE,'utf8'));
-  }catch(e){ return {users:[], payments:[], likes:[], matches:[], reports:[], blocks:[], messages:[]}; }
-}
-function saveDB(db){
-  if(saveLock) return;
-  saveLock = true;
-  try{
-    const tmp = DATA_FILE+'.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(db));
-    fs.renameSync(tmp, DATA_FILE);
-    dbCache = db;
-  }finally{ saveLock = false; }
-}
-if(DB_MODE==='JSON'){ dbCache = loadDB(); setInterval(()=>{ if(dbCache) saveDB(dbCache); }, 30000); }
+const DATA_FILE=path.join(DATA_DIR,'db.json');
+let dbCache=null;
+function loadDB(){ try{ if(!fs.existsSync(DATA_FILE)){ const init={users:[],payments:[],likes:[],matches:[],messages:[]}; fs.writeFileSync(DATA_FILE,JSON.stringify(init)); return init; } return JSON.parse(fs.readFileSync(DATA_FILE,'utf8')); }catch(_){ return {users:[],payments:[],likes:[],matches:[],messages:[]}; } }
+function saveDB(db){ try{ fs.writeFileSync(DATA_FILE+'.tmp',JSON.stringify(db)); fs.renameSync(DATA_FILE+'.tmp',DATA_FILE); dbCache=db; }catch(_){} }
+if(DB_MODE==='JSON'){ dbCache=loadDB(); setInterval(()=>{ if(dbCache) saveDB(dbCache); },8000); }
 
-app.use(helmet({contentSecurityPolicy:false, crossOriginEmbedderPolicy:false}));
+app.use(helmet({contentSecurityPolicy:false}));
 app.use(compression());
-app.use(morgan(DB_MODE==='JSON'?'dev':'combined'));
-app.use(cors({origin:true, credentials:true}));
+app.use(morgan('dev'));
+app.use(cors({origin:true,credentials:true}));
 app.use(express.json({limit:'2mb'}));
-app.use(express.urlencoded({extended:true, limit:'2mb'}));
-app.use('/uploads', express.static(UPLOAD_DIR, {maxAge:'7d'}));
-app.use(express.static(path.join(__dirname,'public'), {maxAge:'0', index:'index.html'}));
-app.use(express.static(__dirname, {maxAge:'0', index:'index.html'}));
+app.use(express.urlencoded({extended:true}));
+app.use('/uploads', express.static(UPLOAD_DIR));
+app.use(express.static(path.join(__dirname,'public')));
 
-const registerLimiter = rateLimit({windowMs: 15*60*1000, max: 20});
-const loginLimiter = rateLimit({windowMs: 15*60*1000, max: 100});
-app.use('/api/register', registerLimiter);
-app.use('/api/login', loginLimiter);
+const storage=multer.diskStorage({destination:(r,f,cb)=>cb(null,UPLOAD_DIR),filename:(r,f,cb)=>cb(null,Date.now()+'-'+crypto.randomBytes(6).toString('hex')+path.extname(f.originalname||'.jpg'))});
+const upload=multer({storage,limits:{fileSize:8*1024*1024,files:10}});
 
-const storage = multer.diskStorage({
-  destination: (req,file,cb)=> cb(null, UPLOAD_DIR),
-  filename: (req,file,cb)=>{
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext);
-  }
-});
-const upload = multer({storage, limits:{fileSize:5*1024*1024, files:10}});
-
-function auth(req,res,next){
-  const token = (req.headers.authorization||'').replace('Bearer ','');
-  if(!token) return res.status(401).json({error:'Nincs token'});
-  try{ req.user = jwt.verify(token, JWT_SECRET); next(); }catch(e){ return res.status(401).json({error:'Token hiba'}); }
-}
-function adminAuth(req,res,next){
-  const token = (req.headers.authorization||'').replace('Bearer ','');
-  if(!token) return res.status(401).json({error:'Nincs admin token'});
-  try{
-    const u = jwt.verify(token, JWT_SECRET);
-    if((u.email||'').toLowerCase()!==ADMIN_EMAIL && u.role!=='admin') return res.status(403).json({error:'Nem admin'});
-    req.user = u; next();
-  }catch(e){ return res.status(401).json({error:'Admin token hiba'}); }
-}
+function auth(req,res,next){ const h=req.headers.authorization; if(!h) return res.status(401).json({error:'No token'}); try{ req.user=jwt.verify(h.replace('Bearer ',''),JWT_SECRET); next(); }catch(e){ return res.status(401).json({error:'Invalid'}); } }
+function calcAge(b){ try{ const birth=new Date(b); const n=new Date(); let a=n.getFullYear()-birth.getFullYear(); if(n.getMonth()<birth.getMonth() || (n.getMonth()===birth.getMonth() && n.getDate()<birth.getDate())) a--; return a; }catch(_){ return 25; } }
 
 async function findUserByEmail(email){
-  email = email.toLowerCase();
-  if(DB_MODE==='JSON') return dbCache.users.find(u=>u.email===email) || null;
-  const shard = getShardIndex(email);
-  const pool = pgPools[shard % pgPools.length];
-  if(pgPools.length===1){
-    for(let i=0;i<SHARD_COUNT;i++){
-      try{ const r = await pool.query(`SELECT * FROM users_${i} WHERE email=$1 LIMIT 1`, [email]); if(r.rows[0]) return r.rows[0]; }catch(_){}
+  email=email.toLowerCase();
+  if(DB_MODE==='JSON') return dbCache.users.find(u=>u.email===email)||null;
+  const shard=getShardIndex(email);
+  for(let i=0;i<SHARD_COUNT;i++){
+    const idx=(shard+i)%SHARD_COUNT;
+    try{ const pool=pgPools[idx%pgPools.length]; const r=await pool.query(`SELECT * FROM users_${idx} WHERE email=$1`,[email]); if(r.rows[0]){ r.rows[0].photos=r.rows[0].photos||[]; return r.rows[0]; } }catch(_){}
+  }
+  return null;
+}
+
+async function listUsersPaginated({paid,page=1,limit=20,search='',excludeEmail='',filterGender=null}){
+  page=parseInt(page)||1; limit=Math.min(50,parseInt(limit)||20);
+  if(DB_MODE==='JSON'){
+    let list=dbCache.users.filter(u=>u.email!==excludeEmail);
+    if(paid===true) list=list.filter(u=>u.is_paid);
+    if(search) list=list.filter(u=>(u.city||'').toLowerCase().includes(search.toLowerCase())||(u.name||'').toLowerCase().includes(search.toLowerCase()));
+    if(filterGender){
+      let filtered=list.filter(u=>{ const g=(u.gender||'').toLowerCase(); if(!g) return true; return g===filterGender; });
+      if(filtered.length>0) list=filtered;
     }
-    return null;
+    for(let i=list.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [list[i],list[j]]=[list[j],list[i]]; }
+    const total=list.length;
+    const slice=list.slice((page-1)*limit,page*limit).map(u=>{ const {password,...s}=u; return s; });
+    return {total,users:slice};
   } else {
-    const r = await pool.query(`SELECT * FROM users_${shard % SHARD_COUNT} WHERE email=$1 LIMIT 1`, [email]);
-    return r.rows[0] || null;
+    let all=[];
+    for(let i=0;i<SHARD_COUNT;i++){
+      try{
+        const pool=pgPools[i%pgPools.length];
+        let q=`SELECT * FROM users_${i} WHERE 1=1`;
+        let params=[];
+        if(paid===true) q+=` AND is_paid=true`;
+        if(filterGender){ q+=` AND (LOWER(gender)=$${params.length+1} OR gender IS NULL)`; params.push(filterGender); }
+        if(search){ q+=` AND (LOWER(city) LIKE $${params.length+1} OR LOWER(name) LIKE $${params.length+1})`; params.push(`%${search.toLowerCase()}%`); }
+        if(excludeEmail){ q+=` AND email != $${params.length+1}`; params.push(excludeEmail.toLowerCase()); }
+        const r=await pool.query(q,params);
+        all.push(...r.rows);
+      }catch(_){}
+    }
+    for(let i=all.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [all[i],all[j]]=[all[j],all[i]]; }
+    const total=all.length;
+    const slice=all.slice((page-1)*limit,page*limit).map(u=>{ const {password,...s}=u; s.photos=s.photos||[]; return s; });
+    return {total,users:slice};
   }
 }
 
-app.get('/api/test',(req,res)=>res.json({message:'Lovenux 1B API LIVE', mode: DB_MODE, shards: SHARD_COUNT}));
-app.get('/api/beat',(req,res)=>res.json({ok:true, beat:'💘 LIVE', time:new Date().toISOString(), mode:DB_MODE, shards:SHARD_COUNT, email:ADMIN_EMAIL}));
-
-app.post('/api/register', upload.array('photos',10), async (req,res)=>{
+app.post('/api/register', upload.array('photos',10), async(req,res)=>{
   try{
-    const email=(req.body.email||'').toLowerCase().trim();
-    const password=req.body.password||'';
-    const city=req.body.city||'';
-    const birth=req.body.birth||null;
-    const bio=req.body.bio||'';
-    if(!email||!password) return res.status(400).json({error:'Email és jelszó kell'});
-    if(await findUserByEmail(email)) return res.status(400).json({error:'Már van ilyen email'});
-    const hash=await bcrypt.hash(password,10);
+    const {email,password,city,birth,child,bio,name,gender,looking_for}=req.body;
+    if(!email||!password||!city||!birth||!name) return res.status(400).json({error:'Minden *-os kell'});
+    if(password.length<6) return res.status(400).json({error:'Jelszó rövid'});
+    const age=calcAge(birth); if(age<18) return res.status(400).json({error:'18+'});
+    const emailLow=email.toLowerCase().trim();
+    if(await findUserByEmail(emailLow)) return res.status(400).json({error:'Email már van'});
+    const hashed=await bcrypt.hash(password,10);
     const photos=(req.files||[]).map(f=>'/uploads/'+path.basename(f.path));
-    const user={email,password:hash,city,birth,bio,photos,is_paid:false,createdAt:new Date().toISOString()};
-    if(DB_MODE==='JSON'){
-      user.id=Date.now()+Math.floor(Math.random()*1000);
-      dbCache.users.push(user); saveDB(dbCache);
-    } else {
-      const shard=getShardIndex(email);
-      const pool=pgPools[shard % pgPools.length];
-      const r=await pool.query(`INSERT INTO users_${shard % SHARD_COUNT}(email,password,city,birth,bio,photos,is_paid,shard) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`, [email,hash,city,birth,bio,JSON.stringify(photos),false,shard]);
-      Object.assign(user, r.rows[0]);
+    const g=(gender||'ferfi').toLowerCase();
+    const lf=(looking_for|| (g==='no'?'ferfiakat':'noket')).toLowerCase();
+    const user={id:Date.now(),email:emailLow,password:hashed,name:name.trim(),city:city.trim(),birth,age,gender:g,looking_for:lf,child:child||'',bio:bio||'',photos,is_paid:false,createdAt:new Date().toISOString()};
+    if(DB_MODE==='JSON'){ dbCache.users.push(user); saveDB(dbCache); }
+    else{
+      const shard=getShardIndex(emailLow);
+      const pool=pgPools[shard%pgPools.length];
+      await pool.query(`INSERT INTO users_${shard}(email,password,name,city,birth,age,gender,looking_for,child,bio,photos,is_paid,shard) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,[user.email,user.password,user.name,user.city,user.birth,user.age,user.gender,user.looking_for,user.child,user.bio,JSON.stringify(user.photos),false,shard]);
     }
-    res.json({success:true, email:user.email, needPayment:true});
-  }catch(e){ res.status(500).json({error:e.message}); }
+    res.json({success:true,email:user.email});
+  }catch(e){ console.error(e); res.status(500).json({error:e.message}); }
 });
 
-app.post('/api/barion/start', async (req,res)=>{
-  const email=(req.body.email||'').toLowerCase();
-  if(!email) return res.status(400).json({error:'Email kell'});
-  const paymentId='BARION-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
-  const gatewayUrl=`https://mypos.barion.com/pay/${paymentId}`;
-  res.json({paymentId,gatewayUrl,alreadyPaid:false,testMode:!process.env.BARION_KEY});
-});
-
-app.post('/api/barion/confirm', async (req,res)=>{
-  const {paymentId,email} = req.body;
-  if(!email) return res.status(400).json({error:'Email kell'});
-  let user=await findUserByEmail(email);
-  if(!user) return res.status(404).json({error:'Nincs user'});
-  if(DB_MODE==='JSON'){ user.is_paid=true; user.paid_at=new Date().toISOString(); saveDB(dbCache); }
-  else { const shard=getShardIndex(email); const pool=pgPools[shard % pgPools.length]; for(let i=0;i<SHARD_COUNT;i++){ try{ await pool.query(`UPDATE users_${i} SET is_paid=true, paid_at=NOW() WHERE email=$1`, [email]); }catch(_){}} }
-  const token=jwt.sign({id:user.id||1,email:user.email||email,role:'user'}, JWT_SECRET, {expiresIn:'30d'});
-  res.json({success:true, token});
-});
-
-app.post('/api/login', async (req,res)=>{
+app.post('/api/barion/start', async(req,res)=>{
   try{
-    const email=(req.body.email||'').toLowerCase();
-    const password=req.body.password||'';
+    const {email}=req.body;
     const user=await findUserByEmail(email);
-    if(!user) return res.status(400).json({error:'Nincs ilyen user'});
-    const ok=await bcrypt.compare(password, user.password);
+    if(!user) return res.status(404).json({error:'Nincs user'});
+    if(user.is_paid) return res.json({alreadyPaid:true,paymentId:'paid'});
+    const pid='LOVENUX-'+Date.now()+'-'+crypto.randomBytes(3).toString('hex');
+    if(DB_MODE==='JSON'){ dbCache.payments=dbCache.payments||[]; dbCache.payments.push({payment_id:pid,email:user.email,amount:1000,status:'Prepared'}); saveDB(dbCache); }
+    res.json({paymentId:pid,testMode:!process.env.BARION_KEY});
+  }catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.post('/api/barion/confirm', async(req,res)=>{
+  try{
+    const {paymentId,email}=req.body;
+    const emailLow=(email||'').toLowerCase();
+    const user=await findUserByEmail(emailLow);
+    if(!user) return res.status(404).json({error:'Nincs user'});
+    if(DB_MODE==='JSON'){ user.is_paid=true; user.paid_at=new Date().toISOString(); const pay=(dbCache.payments||[]).find(p=>p.payment_id===paymentId); if(pay) pay.status='Succeeded'; saveDB(dbCache); }
+    else{
+      const shard=getShardIndex(emailLow);
+      const pool=pgPools[shard%pgPools.length];
+      await pool.query(`UPDATE users_${shard} SET is_paid=true,paid_at=NOW() WHERE email=$1`,[emailLow]);
+    }
+    const token=jwt.sign({id:user.id,email:user.email,role:'user'},JWT_SECRET,{expiresIn:'30d'});
+    res.json({success:true,token});
+  }catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.post('/api/login', async(req,res)=>{
+  try{
+    const {email,password}=req.body;
+    const user=await findUserByEmail(email);
+    if(!user) return res.status(400).json({error:'Nincs user'});
+    const ok=await bcrypt.compare(password,user.password);
     if(!ok) return res.status(400).json({error:'Hibás jelszó'});
-    if(!user.is_paid) return res.status(402).json({error:'Még nem fizettél 1000 Ft-ot!', needPayment:true, email:user.email});
-    const token=jwt.sign({id:user.id||1,email:user.email,role:'user'}, JWT_SECRET, {expiresIn:'30d'});
-    res.json({success:true, token, user:{id:user.id,email:user.email,is_paid:true,city:user.city}});
+    if(!user.is_paid) return res.status(402).json({error:'Még nem fizettél',needPayment:true,email:user.email});
+    const token=jwt.sign({id:user.id,email:user.email,role:'user'},JWT_SECRET,{expiresIn:'30d'});
+    res.json({success:true,token,user:{email:user.email,is_paid:true,gender:user.gender,looking_for:user.looking_for}});
   }catch(e){ res.status(500).json({error:e.message}); }
 });
 
-app.post('/api/forgot', async (req,res)=>{ res.json({message:'Ha van ilyen e-mail, küldtünk levelet'}); });
+app.post('/api/forgot', async(req,res)=>{ res.json({message:'Ha van ilyen email, küldtünk levelet'}); });
 
-app.get('/api/discover', auth, async (req,res)=>{
+app.get('/api/discover', auth, async(req,res)=>{
   try{
-    let list = DB_MODE==='JSON' ? dbCache.users.filter(u=>u.email!==req.user.email && u.is_paid) : [];
-    if(DB_MODE!=='JSON'){
-      const pool=pgPools[0];
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const r=await pool.query(`SELECT id,email,city,bio,photos,is_paid FROM users_${i} WHERE is_paid=true LIMIT 50`); list=list.concat(r.rows); }catch(_){}}
-    }
-    const users = list.slice(0,50).map(u=>{ const {password,...safe}=u; return safe; });
-    res.json({total: users.length, users});
+    const me=await findUserByEmail(req.user.email);
+    if(!me) return res.status(401).json({error:'No user'});
+    let filterGender=null;
+    const looking=(me.looking_for||'').toLowerCase();
+    if(looking.includes('no')) filterGender='no';
+    else if(looking.includes('ferfi')) filterGender='ferfi';
+    const result=await listUsersPaginated({paid:true,page:req.query.page||1,limit:req.query.limit||20,search:req.query.city||'',excludeEmail:req.user.email,filterGender});
+    res.json({total:result.total,users:result.users});
   }catch(e){ res.status(500).json({error:e.message}); }
 });
 
-app.post('/api/admin/login', async (req,res)=>{
-  const {email,password}=req.body;
-  if(email.toLowerCase()!==ADMIN_EMAIL) return res.status(403).json({error:'Nem admin email'});
-  const adminPass = process.env.ADMIN_PASS || 'LovenuxAdmin2026!';
-  if(password!==adminPass) return res.status(400).json({error:'Hibás admin jelszó'});
-  const token = jwt.sign({email: email.toLowerCase(), role:'admin'}, JWT_SECRET, {expiresIn:'12h'});
-  res.json({success:true, token});
-});
-
-app.get('/api/admin/stats', adminAuth, async (req,res)=>{
+app.post('/api/like', auth, async(req,res)=>{
   try{
-    let total=0, paid=0, today=0;
+    const {toEmail}=req.body;
+    const from=req.user.email.toLowerCase();
+    const to=toEmail.toLowerCase();
+    if(from===to) return res.status(400).json({error:'Magad nem'});
     if(DB_MODE==='JSON'){
-      total=dbCache.users.length;
-      paid=dbCache.users.filter(u=>u.is_paid).length;
-      today=dbCache.users.filter(u=> (new Date(u.createdAt).toDateString()===new Date().toDateString())).length;
-    } else {
-      const pool=pgPools[0];
-      for(let i=0;i<SHARD_COUNT;i++){
-        try{
-          const r=await pool.query(`SELECT COUNT(*) as c FROM users_${i}`);
-          total+=parseInt(r.rows[0].c||0);
-          const rp=await pool.query(`SELECT COUNT(*) as c FROM users_${i} WHERE is_paid=true`);
-          paid+=parseInt(rp.rows[0].c||0);
-        }catch(_){}
+      dbCache.likes=dbCache.likes||[];
+      if(!dbCache.likes.find(l=>l.from===from&&l.to===to)) dbCache.likes.push({from,to,at:new Date().toISOString()});
+      const other=dbCache.likes.find(l=>l.from===to&&l.to===from);
+      if(other){
+        dbCache.matches=dbCache.matches||[];
+        if(!dbCache.matches.find(m=>(m.user1===from&&m.user2===to)||(m.user1===to&&m.user2===from))) dbCache.matches.push({user1:from,user2:to,at:new Date().toISOString()});
+        saveDB(dbCache);
+        return res.json({success:true,match:true});
       }
-    }
-    res.json({total, totalUsers:total, paidUsers:paid, todayUsers:today, today, totalIncome:paid*1000, online:Math.floor(total*0.3), mode:DB_MODE, shards:SHARD_COUNT});
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-// 1B PAGINATED USERS - NEM FAGY LE 1 MILLIÁRDNÁL
-app.get('/api/admin/users', adminAuth, async (req,res)=>{
-  try{
-    const page=parseInt(req.query.page||'1'); const limit=Math.min(parseInt(req.query.limit||'100'), 500);
-    const search=(req.query.search||'').toLowerCase(); const paidFilter=req.query.paid;
-    let all=[];
-    if(DB_MODE==='JSON'){
-      all=dbCache.users;
-      if(search) all=all.filter(u=>u.email.toLowerCase().includes(search));
-      if(paidFilter==='true') all=all.filter(u=>u.is_paid);
-      if(paidFilter==='false') all=all.filter(u=>!u.is_paid);
-    } else {
-      const pool=pgPools[0];
-      for(let i=0;i<SHARD_COUNT;i++){
-        try{
-          const r=await pool.query(`SELECT id,email,city,age,photos,is_paid,created_at,shard FROM users_${i} ORDER BY id DESC LIMIT 500`);
-          all=all.concat(r.rows.map(x=>({...x, createdAt:x.created_at, created_at:x.created_at})));
-        }catch(_){}
-      }
-      if(search) all=all.filter(u=>(u.email||'').toLowerCase().includes(search));
-      if(paidFilter==='true') all=all.filter(u=>u.is_paid);
-      if(paidFilter==='false') all=all.filter(u=>!u.is_paid);
-      all.sort((a,b)=> (b.id||0)-(a.id||0));
-    }
-    const total=all.length;
-    const start=(page-1)*limit;
-    const users=all.slice(start, start+limit).map(u=>{ const {password,...safe}=u; return safe; });
-    res.json({page, limit, total, users});
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.post('/api/admin/toggle-paid/:id', adminAuth, async (req,res)=>{
-  try{
-    const id=req.params.id;
-    if(DB_MODE==='JSON'){
-      const u=dbCache.users.find(x=> String(x.id)===String(id));
-      if(!u) return res.status(404).json({error:'Nincs user'});
-      u.is_paid=!u.is_paid;
       saveDB(dbCache);
-      res.json({success:true, is_paid:u.is_paid});
+      return res.json({success:true,match:false});
     } else {
-      const pool=pgPools[0];
-      for(let i=0;i<SHARD_COUNT;i++){
-        try{
-          const r=await pool.query(`UPDATE users_${i} SET is_paid = NOT is_paid WHERE id=$1 RETURNING is_paid`, [id]);
-          if(r.rows[0]) return res.json({success:true, is_paid:r.rows[0].is_paid});
-        }catch(_){}
+      const shard=getShardIndex(from);
+      const pool=pgPools[shard%pgPools.length];
+      await pool.query(`INSERT INTO likes_${shard}(from_email,to_email) VALUES($1,$2) ON CONFLICT DO NOTHING`,[from,to]);
+      let found=false;
+      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM likes_${i} WHERE from_email=$1 AND to_email=$2`,[to,from]); if(r.rows.length){ found=true; break; } }catch(_){} }
+      if(found){
+        const shardM=getShardIndex(from);
+        const poolM=pgPools[shardM%pgPools.length];
+        const u1=from<to?from:to; const u2=from<to?to:from;
+        await poolM.query(`INSERT INTO matches_${shardM}(user1,user2) VALUES($1,$2) ON CONFLICT DO NOTHING`,[u1,u2]);
+        return res.json({success:true,match:true});
       }
-      res.status(404).json({error:'Nincs user'});
+      return res.json({success:true,match:false});
     }
   }catch(e){ res.status(500).json({error:e.message}); }
 });
 
-// PHONE PERFECT APP compatibility
-app.get('/api/users/discovery', auth, async (req,res)=>{
+app.get('/api/matches', auth, async(req,res)=>{
   try{
-    let list = DB_MODE==='JSON' ? dbCache.users.filter(u=>u.email!==req.user.email) : [];
-    if(DB_MODE!=='JSON'){
-      const pool=pgPools[0];
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const r=await pool.query(`SELECT id,email,city,age,bio,photos,is_paid FROM users_${i} WHERE is_paid=true LIMIT 100`); list=list.concat(r.rows); }catch(_){}}
+    const me=req.user.email.toLowerCase();
+    if(DB_MODE==='JSON'){
+      const ms=(dbCache.matches||[]).filter(m=>m.user1===me||m.user2===me);
+      const emails=ms.map(m=>m.user1===me?m.user2:m.user1);
+      const users=emails.map(em=>dbCache.users.find(u=>u.email===em)).filter(Boolean).map(u=>{ const {password,...s}=u; return s; });
+      return res.json(users);
+    } else {
+      let emails=[];
+      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM matches_${i} WHERE user1=$1 OR user2=$1`,[me]); r.rows.forEach(row=>emails.push(row.user1===me?row.user2:row.user1)); }catch(_){} }
+      let users=[];
+      for(let em of emails){ const u=await findUserByEmail(em); if(u){ const {password,...s}=u; s.photos=s.photos||[]; users.push(s); } }
+      res.json(users);
     }
-    const safe=list.slice(0,100).map(u=>{ const {password,...s}=u; return {id:u.id, name:(u.email||'').split('@')[0], age:u.age||25, city:u.city||'Bp', dist: Math.floor(Math.random()*20)+' km', online:1, verified: u.is_paid?1:0, bio:u.bio||'', ...s}; });
-    res.json(safe);
   }catch(e){ res.status(500).json({error:e.message}); }
 });
 
-app.get('/api/heart', (req,res)=>res.json({ok:true, beat:'💘 LIVE', time:new Date().toISOString(), mode:DB_MODE, shards:SHARD_COUNT, email:ADMIN_EMAIL}));
+app.get('/api/messages', auth, async(req,res)=>{
+  try{
+    const me=req.user.email.toLowerCase();
+    if(DB_MODE==='JSON'){
+      const msgs=(dbCache.messages||[]).filter(m=>m.from===me||m.to===me).sort((a,b)=>new Date(a.at)-new Date(b.at));
+      return res.json(msgs);
+    } else {
+      let all=[];
+      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM messages_${i} WHERE from_email=$1 OR to_email=$1 ORDER BY at ASC`,[me]); all.push(...r.rows.map(row=>({from:row.from_email,to:row.to_email,text:row.text,at:row.at}))); }catch(_){} }
+      all.sort((a,b)=>new Date(a.at)-new Date(b.at));
+      res.json(all);
+    }
+  }catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.get('/api/messages/:email', auth, async(req,res)=>{
+  try{
+    const me=req.user.email.toLowerCase();
+    const other=req.params.email.toLowerCase();
+    if(DB_MODE==='JSON'){
+      const msgs=(dbCache.messages||[]).filter(m=>(m.from===me&&m.to===other)||(m.from===other&&m.to===me)).sort((a,b)=>new Date(a.at)-new Date(b.at));
+      return res.json(msgs);
+    } else {
+      let all=[];
+      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM messages_${i} WHERE (from_email=$1 AND to_email=$2) OR (from_email=$2 AND to_email=$1) ORDER BY at ASC`,[me,other]); all.push(...r.rows.map(row=>({from:row.from_email,to:row.to_email,text:row.text,at:row.at}))); }catch(_){} }
+      all.sort((a,b)=>new Date(a.at)-new Date(b.at));
+      res.json(all);
+    }
+  }catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.post('/api/messages', auth, async(req,res)=>{
+  try{
+    const me=req.user.email.toLowerCase();
+    const {to,text}=req.body;
+    if(!to||!text) return res.status(400).json({error:'Hiányzik'});
+    const other=to.toLowerCase();
+    if(DB_MODE==='JSON'){ dbCache.messages=dbCache.messages||[]; dbCache.messages.push({from:me,to:other,text,at:new Date().toISOString()}); saveDB(dbCache); return res.json({success:true}); }
+    else{
+      const shard=getShardIndex(me);
+      const pool=pgPools[shard%pgPools.length];
+      await pool.query(`INSERT INTO messages_${shard}(from_email,to_email,text) VALUES($1,$2,$3)`,[me,other,text]);
+      return res.json({success:true});
+    }
+  }catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.get('/api/heart', (req,res)=>res.json({ok:true,mode:DB_MODE,shards:SHARD_COUNT}));
+app.post('/api/admin/login', async(req,res)=>{
+  const {email,password}=req.body;
+  const adminEmail = (process.env.ADMIN_EMAIL || 'robi19920508@gmail.com').toLowerCase();
+  if(email.toLowerCase()!==adminEmail) return res.status(403).json({error:'Nem admin'});
+  const adminPass=process.env.ADMIN_PASS||'LovenuxAdmin2026!';
+  if(password!==adminPass) return res.status(400).json({error:'Hibás jelszó'});
+  const token=jwt.sign({email:email.toLowerCase(),role:'admin'},JWT_SECRET,{expiresIn:'12h'});
+  res.json({success:true,token});
+});
 
 app.get('*',(req,res)=>{
-  // Never show API LIVE - always serve frontend
-  const candidates = [
-    path.join(__dirname,'public','index.html'),
-    path.join(__dirname,'index.html'),
-    path.join(process.cwd(),'public','index.html'),
-    path.join(process.cwd(),'index.html'),
-    '/opt/render/project/src/public/index.html',
-    '/opt/render/project/src/index.html'
-  ];
-  for(let p of candidates){
-    if(fs.existsSync(p)){
-      console.log('✅ Serving frontend:', p, 'for', req.path);
-      return res.sendFile(p);
-    }
-  }
-  console.error('❌ No index.html found, candidates checked:', candidates);
-  // Last resort - serve the public/index.html content directly if we can read it
-  try{
-    const fallback = path.join(__dirname,'public','index.html');
-    if(fs.existsSync(fallback)){
-      return res.send(fs.readFileSync(fallback,'utf8'));
-    }
-  }catch(e){}
-  res.status(200).send('<!DOCTYPE html><html><head><meta http-equiv="refresh" content="2"></head><body style="font-family:sans-serif;text-align:center;padding:50px"><h1>💘 Lovenux ébred... 30 mp</h1><p>Free szerver ébred, frissítsd az oldalt!</p><script>setTimeout(()=>location.reload(),2500)</script></body></html>');
+  const idx=path.join(__dirname,'public','index.html');
+  if(require('fs').existsSync(idx)) return res.sendFile(idx);
+  res.send('Lovenux GENDER LIVE');
 });
 
 (async()=>{
-  if(DB_MODE==='SHARDED'){ try{ await initPG(); }catch(e){ console.error('PG init failed, fallback to JSON', e.message); DB_MODE='JSON'; dbCache=loadDB(); } }
-  app.listen(PORT, ()=>console.log(`💘 Lovenux 1B fut: ${PORT} - MODE:${DB_MODE} - ${ADMIN_EMAIL}`));
+  if(DB_MODE==='SHARDED'){ try{ await initPG(); }catch(e){ console.error('PG fail',e.message); DB_MODE='JSON'; dbCache=loadDB(); } }
+  app.listen(PORT,()=>console.log(`Lovenux GENDER fut:${PORT} MODE:${DB_MODE}`));
 })();
+
