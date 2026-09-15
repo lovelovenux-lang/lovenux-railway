@@ -1,7 +1,7 @@
 {
   "name": "lovenux2-1B",
   "version": "2.0.0-1B-IGAZI",
-  "description": "Lovenux - EREDETI IGAZI - 1 milliárd regisztrációig skálázható - sharded Postgres + Redis + S3",
+  "description": "Lovenux - EREDETI IGAZI - 1 milli\u00e1rd regisztr\u00e1ci\u00f3ig sk\u00e1l\u00e1zhat\u00f3 - sharded Postgres + Redis + S3",
   "main": "server.js",
   "engines": {
     "node": ">=18.0.0"
@@ -28,7 +28,8 @@
     "bullmq": "^5.4.0",
     "sharp": "^0.33.3",
     "nodemailer": "^6.9.13",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "socket.io": "^4.7.5"
   },
   "optionalDependencies": {
     "@aws-sdk/client-s3": "^3.540.0"
