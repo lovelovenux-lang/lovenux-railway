@@ -162,15 +162,17 @@ app.post('/api/register',upload.array('photos',10),async(req,res)=>{
     let photos=[]; if(req.files){ photos=req.files.map(f=>'/uploads/'+f.filename); }
     let hobbyArr=[]; try{ hobbyArr=JSON.parse(hobbies||'[]'); }catch(_){}
     if(DB_MODE==='JSON'){
-      const user={email:emailL,password:hashed,name,city,birth,age,gender:gender||'ferfi',looking_for:looking_for||'noket',child,bio,photos,hobbies:hobbyArr,height:height?parseInt(height):null,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,is_paid:false,created_at:new Date().toISOString(),last_active:new Date().toISOString()};
+      const user={email:emailL,password:hashed,name,city,birth,age,gender:gender||'ferfi',looking_for:looking_for||'noket',child,bio,photos,hobbies:hobbyArr,height:height?parseInt(height):null,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,is_paid:true,paid_at:new Date().toISOString(),created_at:new Date().toISOString(),last_active:new Date().toISOString()};
       dbCache.users.push(user); saveJSON();
-      return res.json({success:true,email:emailL,needPayment:true});
+      const tokenFree = require('jsonwebtoken').sign({email:emailL}, process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME', {expiresIn:'30d'});
+      return res.json({success:true,email:emailL,token:tokenFree,user:{email:emailL,name},freeMode:true});
     }else{
       const shard=getShardIndex(emailL);
       const pool=pgPools[shard%pgPools.length];
-      await pool.query(`INSERT INTO users_${shard}(email,password,name,city,birth,age,gender,looking_for,child,bio,photos,hobbies,height,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,is_paid,shard) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,false,$24)`,
+      await pool.query(`INSERT INTO users_${shard}(email,password,name,city,birth,age,gender,looking_for,child,bio,photos,hobbies,height,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,is_paid,shard) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,true,$24)`,
       [emailL,hashed,name,city,birth,age,gender,looking_for,child,bio,JSON.stringify(photos),JSON.stringify(hobbyArr),height?parseInt(height):null,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,shard]);
-      return res.json({success:true,email:emailL,needPayment:true});
+      const tokenFree2 = require('jsonwebtoken').sign({email:emailL}, process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME', {expiresIn:'30d'});
+      return res.json({success:true,email:emailL,token:tokenFree2,user:{email:emailL,name},freeMode:true});
     }
   }catch(e){ console.error(e); res.status(500).json({error:e.message}); }
 });
@@ -180,7 +182,7 @@ app.post('/api/barion/start',async(req,res)=>{
     const emailL=req.body.email.toLowerCase().trim();
     const u=await findUserByEmail(emailL);
     if(!u) return res.status(404).json({error:'Nincs user'});
-    if(u.is_paid) return res.json({alreadyPaid:true});
+    return res.json({alreadyPaid:true,freeMode:true}); // FREE MODE
     const paymentId='PAY-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
     if(DB_MODE==='JSON'){
       dbCache.payments=dbCache.payments||[];
@@ -217,7 +219,8 @@ app.post('/api/login',async(req,res)=>{
     if(!u) return res.status(400).json({error:'Nincs email'});
     const ok=await bcrypt.compare(req.body.password,u.password);
     if(!ok) return res.status(400).json({error:'Hibás jelszó'});
-    if(!u.is_paid) return res.status(402).json({error:'Még nem fizettél',needPayment:true,email:emailL});
+    // FREE MODE - no payment required
+    // if(!u.is_paid) return res.status(402).json({error:'Még nem fizettél',needPayment:true,email:emailL});
     const token=jwt.sign({email:emailL},JWT_SECRET,{expiresIn:'30d'});
     if(DB_MODE==='JSON'){ const uu=dbCache.users.find(x=>x.email===emailL); if(uu) uu.last_active=new Date().toISOString(); saveJSON(); }
     else{ const shard=getShardIndex(emailL); const pool=pgPools[shard%pgPools.length]; await pool.query(`UPDATE users_${shard} SET last_active=NOW() WHERE email=$1`,[emailL]); }
@@ -238,7 +241,7 @@ app.get('/api/discover',auth,async(req,res)=>{
     const me=req.user.email.toLowerCase();
     const {minAge=18,maxAge=99,city='',gender='auto',body_type='',education='',smoking='',drinking='',hobbies='[]'}=req.query;
     if(DB_MODE==='JSON'){
-      let list=dbCache.users.filter(u=>u.email!==me && u.is_paid);
+      let list=dbCache.users.filter(u=>u.email!==me); // FREE - show all
       if(gender==='ferfi') list=list.filter(u=>u.gender==='ferfi');
       else if(gender==='no') list=list.filter(u=>u.gender==='no');
       else { const my=dbCache.users.find(x=>x.email===me); if(my){ if(my.looking_for==='noket') list=list.filter(u=>u.gender==='no'); else if(my.looking_for==='ferfiakat') list=list.filter(u=>u.gender==='ferfi'); } }
@@ -265,7 +268,7 @@ app.get('/api/discover',auth,async(req,res)=>{
             const meR = await mePool.query(`SELECT gender FROM users_${getShardIndex(me)} WHERE email=$1`,[me]);
             if(meR.rows[0]) meGender = meR.rows[0].gender;
           }catch(_){}
-          let q=`SELECT * FROM users_${i} WHERE is_paid=true AND email!=$1 AND age BETWEEN $2 AND $3`;
+          let q=`SELECT * FROM users_${i} WHERE email!=$1 AND age BETWEEN $2 AND $3`; // FREE - no paid check
           let params=[me,parseInt(minAge),parseInt(maxAge)]; let idx=4;
           if(gender==='ferfi'){ q+=` AND gender='ferfi'`; }
           else if(gender==='no'){ q+=` AND gender='no'`; }
