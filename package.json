@@ -1,26 +1,24 @@
 {
-  "name": "lovenux-server-1b",
-  "version": "2.0.0",
-  "description": "Lovenux 1 Billion User Ready Server",
+  "name": "lovenux",
+  "version": "3.0.0-DEMO-LOGO-FIX",
+  "description": "Lovenux - 1000 Ft \u00f6r\u00f6k t\u00e1rskeres\u0151 - telefonos app + demo + log\u00f3",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.600.0",
-    "@aws-sdk/lib-storage": "^3.600.0",
-    "bcryptjs": "^2.4.3",
-    "compression": "^1.7.4",
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.2.0",
     "helmet": "^7.1.0",
-    "ioredis": "^5.4.1",
+    "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "pg": "^8.11.5"
+    "dotenv": "^16.4.5",
+    "compression": "^1.7.4",
+    "morgan": "^1.10.0",
+    "pg": "^8.11.3"
   }
 }
