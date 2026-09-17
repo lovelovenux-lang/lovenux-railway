@@ -237,11 +237,11 @@ input[type=range]{width:100%;accent-color:var(--pink);height:3px}
 <div class="modal" id="profileM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2 id="pName">Profil</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><div id="pContent"></div><div style="display:flex;gap:6px;margin-top:10px"><button class="btn-ghost" style="flex:1" onclick="closeM();swipe(-1)">✕</button><button class="btn-main" style="flex:1;margin-top:0" onclick="closeM();doLike()">❤️</button></div></div></div></div>
 <div class="modal" id="chatM" onclick="if(event.target===this)closeM()"><div class="modal-box" style="height:88vh;display:flex;flex-direction:column"><div class="m-head"><h2 id="chatName">Üzenet</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="chat-wrap"><div class="chat-msgs" id="chatMsgs"></div><div class="chat-input"><input class="input" id="chatInput" placeholder="Írj üzenetet..." onkeydown="if(event.key==='Enter')sendMsg()"><button class="btn-main" style="width:auto;margin:0;padding:7px 12px;border-radius:18px" onclick="sendMsg()">Küld</button></div></div></div></div>
 <div class="modal" id="barionM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>💳 Barion • 1000 Ft</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><div id="barionContent" style="background:#fff;border:1px solid #f3e8ff;border-radius:10px;padding:10px;text-align:center"><b>Örök tagság 1000 Ft</b></div><button class="btn-main" id="barionBtn" onclick="startBarion()">💳 Fizetés</button></div></div></div>
-<div class="modal" id="payM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>💳 1000 Ft örök</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><div style="background:#fff;border:1px solid #f3e8ff;border-radius:10px;padding:10px;text-align:center"><b>1000 Ft örök</b><br><small>Egyszer fizetsz, belül ingyenes</small></div><button class="btn-main" onclick="startBarion()">💳 Fizetés</button></div></div></div>
+<div class="modal" id="payM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>💳 Ingyenes</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><div style="background:#fff;border:1px solid #f3e8ff;border-radius:10px;padding:10px;text-align:center"><b>Ingyenes</b><br><small>Egyszer fizetsz, belül ingyenes</small></div><button class="btn-main" onclick="startBarion()">💳 Fizetés</button></div></div></div>
 <div class="modal" id="forgotM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>Jelszó</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><input class="input" id="fEmail" type="email" placeholder="E-mail"><button class="btn-main" onclick="doForgot()">Küldés</button></div></div></div>
-<div class="modal" id="aszfM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>ÁSZF • Lovenux</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><p style="font-size:10px">Lovenux 1000 Ft örök • Belül ingyenes • Férfiak nőket, nők férfiakat látnak • 18+</p></div></div></div>
+<div class="modal" id="aszfM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>ÁSZF • Lovenux</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><p style="font-size:10px">Lovenux Ingyenes • Belül ingyenes • Férfiak nőket, nők férfiakat látnak • 18+</p></div></div></div>
 <div class="modal" id="gdprM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>GDPR</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><p style="font-size:10px">Adatkezelő: Sarró Róbert</p></div></div></div>
-<div class="modal" id="impM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>Impresszum</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><p style="font-size:10px">Lovenux Sarró Róbert • 1000 Ft örök</p></div></div></div>
+<div class="modal" id="impM" onclick="if(event.target===this)closeM()"><div class="modal-box"><div class="m-head"><h2>Impresszum</h2><button class="m-close" onclick="closeM()">✕</button></div><div class="m-body"><p style="font-size:10px">Lovenux Sarró Róbert • Ingyenes</p></div></div></div>
 
 </div>
 
@@ -345,6 +345,16 @@ async function doRegister(){
    const r=await fetch(API+'/api/register',{method:'POST',body:fd});
    const j=await r.json();
    if(!r.ok)throw j;
+   // FREE MODE - server returns token immediately, no payment needed
+   if(j.token){
+     authToken=j.token;
+     localStorage.setItem('lovenux_token',authToken);
+     localStorage.setItem('lovenux_email',email);
+     localStorage.setItem('lovenux_gender',selectedGender);
+     showMsg('Regisztráció OK! Beléptél 💘','ok');
+     enterAppScreen();
+     return;
+   }
    showMsg('Regisztráció OK! Fizess 1000 Ft-ot','ok');
    pendingEmail=email;
    localStorage.setItem('lovenux_gender',selectedGender);
@@ -364,7 +374,7 @@ async function startBarion(e){
    const data=await api('/api/barion/start',{method:'POST',body:JSON.stringify({email})});
    pendingPaymentId=data.paymentId;
    if(data.alreadyPaid){showMsg('Már fizettél! Beléphetsz','ok');return showLogin()}
-   document.getElementById('barionContent').innerHTML=`<div style="background:#f5f3ff;border-radius:10px;padding:10px;text-align:center"><b>Barion • 1000 Ft örök</b><br><small>${data.paymentId}</small><br><br><button class="btn-main" onclick="confirmBarion()">✅ Fizetés OK (teszt)</button></div>`;
+   document.getElementById('barionContent').innerHTML=`<div style="background:#f5f3ff;border-radius:10px;padding:10px;text-align:center"><b>Barion • Ingyenes</b><br><small>${data.paymentId}</small><br><br><button class="btn-main" onclick="confirmBarion()">✅ Fizetés OK (teszt)</button></div>`;
    openM('barion');
  }catch(err){showMsg(err.error||'Hiba','err')}
  if(btn){btn.disabled=false;btn.textContent='💳 Fizetés'}
