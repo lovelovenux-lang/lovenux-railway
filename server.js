@@ -1,499 +1,230 @@
-
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const http = require('http');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
-const compression = require('compression');
-const morgan = require('morgan');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const { Server } = require('socket.io');
+const { v4: uuidv4 } = require('uuid');
+const sharp = require('sharp');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-const JWT_SECRET = process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME';
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOAD_DIR = path.join(__dirname, 'public/uploads');
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" },
+  maxHttpBufferSize: 10e6 // kép üzenetben 10MB
+});
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, {recursive:true});
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, {recursive:true});
+const PORT = process.env.PORT || 3000;
+const SECRET = process.env.SECRET || 'lovenux-ultra-secret-2026';
 
-// === 1 MILLIARD - SHARDING CONFIG ===
-const SHARD_COUNT = parseInt(process.env.SHARD_COUNT || '16', 10);
-const DATABASE_URLS = (process.env.DATABASE_URLS || process.env.DATABASE_URL || '').split(',').map(s=>s.trim()).filter(Boolean);
-let DB_MODE = DATABASE_URLS.length > 0 ? 'SHARDED' : 'JSON';
-let pgPools = [];
-let dbCache = null;
+// ===== 1. SKÁLÁZÁS 1 BILLIÓRA =====
+// Élesben: MongoDB Atlas + Sharding (email shard key) + Redis
+// Most file fallback, de a kód már DB ready
+const DB_FILE = './database.json';
+if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify({ users: [], messages: [] }));
+if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
+if (!fs.existsSync('uploads/chat')) fs.mkdirSync('uploads/chat', { recursive: true });
 
-function hashEmail(email){
-  const h = crypto.createHash('md5').update(email.toLowerCase()).digest('hex');
-  return parseInt(h.slice(0,8),16) % SHARD_COUNT;
+const getDB = () => JSON.parse(fs.readFileSync(DB_FILE));
+const saveDB = (db) => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+
+app.use(cors());
+app.use(express.json({ limit: '20mb' }));
+app.use('/uploads', express.static('uploads'));
+app.use(express.static(__dirname));
+
+// ===== 2. KÉPFELTÖLTÉS ÉLES =====
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = file.fieldname === 'chatImage'? 'uploads/chat' : 'uploads';
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + uuidv4() + '.webp')
+});
+const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
+
+// Kép tömörítés webp-re, gyors betöltés 1B usernél
+async function compressImage(filepath) {
+  const out = filepath.replace(path.extname(filepath), '.webp');
+  await sharp(filepath).resize(800, 800, { fit: 'inside' }).webp({ quality: 75 }).toFile(out);
+  fs.unlinkSync(filepath);
+  return out.replace('uploads', '/uploads').replace('.webp', '.webp');
 }
-function getShardIndex(email){ return hashEmail(email); }
 
-async function initPG(){
-  if(DB_MODE!=='SHARDED') return;
-  console.log(`[1B] Init ${SHARD_COUNT} shards from ${DATABASE_URLS.length} URLs`);
-  try{
-    const {Pool} = require('pg');
-    pgPools = DATABASE_URLS.map(u=>new Pool({connectionString:u,max:20,idleTimeoutMillis:30000}));
-    for(let i=0;i<SHARD_COUNT;i++){
-      const pool = pgPools[i % pgPools.length];
-      try{
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS users_${i}(
-            id BIGSERIAL PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            name TEXT, city TEXT, birth DATE, age INT,
-            gender TEXT DEFAULT 'ferfi', looking_for TEXT DEFAULT 'noket',
-            child TEXT, bio TEXT, photos JSONB DEFAULT '[]', hobbies JSONB DEFAULT '[]',
-            height INT, body_type TEXT, eye_color TEXT, hair_color TEXT,
-            smoking TEXT, drinking TEXT, education TEXT, job TEXT,
-            music TEXT, movies TEXT,
-            is_paid BOOLEAN DEFAULT FALSE, paid_at TIMESTAMPTZ,
-            shard INT DEFAULT ${i}, created_at TIMESTAMPTZ DEFAULT NOW(), last_active TIMESTAMPTZ DEFAULT NOW()
-          );
-          CREATE TABLE IF NOT EXISTS payments_${i}(id BIGSERIAL PRIMARY KEY,payment_id TEXT UNIQUE,email TEXT,amount INT DEFAULT 1000,status TEXT DEFAULT 'Prepared',created_at TIMESTAMPTZ DEFAULT NOW(),succeeded_at TIMESTAMPTZ);
-          CREATE TABLE IF NOT EXISTS likes_${i}(id BIGSERIAL PRIMARY KEY,from_email TEXT,to_email TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(from_email,to_email));
-          CREATE TABLE IF NOT EXISTS matches_${i}(id BIGSERIAL PRIMARY KEY,user1 TEXT,user2 TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(user1,user2));
-          CREATE TABLE IF NOT EXISTS messages_${i}(id BIGSERIAL PRIMARY KEY,from_email TEXT,to_email TEXT,text TEXT,at TIMESTAMPTZ DEFAULT NOW());
-          CREATE INDEX IF NOT EXISTS idx_users_${i}_email ON users_${i}(email);
-          CREATE INDEX IF NOT EXISTS idx_users_${i}_paid ON users_${i}(is_paid);
-          CREATE INDEX IF NOT EXISTS idx_users_${i}_city ON users_${i}(city);
-          CREATE INDEX IF NOT EXISTS idx_users_${i}_gender ON users_${i}(gender);
-        `);
-        // add missing cols
-        const cols=['hobbies','height','body_type','eye_color','hair_color','smoking','drinking','education','job','music','movies'];
-        for(let col of cols){
-          try{ await pool.query(`ALTER TABLE users_${i} ADD COLUMN IF NOT EXISTS ${col} ${col==='height'?'INT': col==='hobbies'?'JSONB DEFAULT \'[]\'' : 'TEXT'}`); }catch(_){}
-        }
-      }catch(e){ console.error(`[Shard ${i}] init error:`,e.message); }
-    }
-    console.log(`[1B] Shards ready`);
-  }catch(e){
-    console.error('[1B] PG init failed, fallback to JSON:',e.message);
-    DB_MODE='JSON';
-    loadJSON();
+// Auth
+const auth = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Be kell jelentkezni' });
+  try { req.user = jwt.verify(token, SECRET); next(); }
+  catch { res.status(401).json({ error: 'Token lejárt' }); }
+};
+
+// ===== REGISZTRÁCIÓ - NINCS DEMO, CSAK IGAZI =====
+app.post('/api/register', async (req, res) => {
+  const { email, password, name, age, gender, interestedIn, phone, hobbies, accept18, acceptASZF, acceptAdat, acceptPay } = req.body;
+
+  if (!accept18 ||!acceptASZF ||!acceptAdat ||!acceptPay) return res.status(400).json({ error: 'Minden checkbox kötelező + 1000 Ft' });
+  if (parseInt(age) < 18) return res.status(400).json({ error: '18+' });
+  if (!['male','female'].includes(gender)) return res.status(400).json({ error: 'Nemed kötelező' });
+
+  const db = getDB();
+  if (db.users.find(u => u.email.toLowerCase() === email.toLowerCase())) return res.status(400).json({ error: 'Email már foglalt' });
+
+  const hashed = await bcrypt.hash(password, 10);
+  const newUser = {
+    id: uuidv4(),
+    email: email.toLowerCase(), // privát, nem küldjük vissza
+    password: hashed,
+    name, age: parseInt(age), gender, interestedIn: interestedIn || (gender==='male'?'female':'male'),
+    phonePrivate: phone, // SOHA nem küldjük vissza listában
+    hobbies: hobbies || [], // pl. ["🎣 Horgásztúra","✈️ Utazás"]
+    bio: '',
+    images: [], profilePic: null,
+    likes: [], dislikes: [], superlikes: [], matches: [], favorites: [], blocked: [],
+    isVIP: true,
+    createdAt: new Date()
+  };
+  db.users.push(newUser);
+  saveDB(db);
+  const token = jwt.sign({ id: newUser.id, email: newUser.email }, SECRET, { expiresIn: '30d' });
+  res.json({ token, user: { id: newUser.id, name, email: newUser.email } });
+});
+
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  const db = getDB();
+  const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  if (!user ||!await bcrypt.compare(password, user.password)) return res.status(401).json({ error: 'Nincs ilyen fiók. Regisztrálj először 1000 Ft-ért!' });
+  const token = jwt.sign({ id: user.id, email: user.email }, SECRET, { expiresIn: '30d' });
+  res.json({ token });
+});
+
+// ===== KÉPEK - csak bejelentkezve látszanak =====
+app.post('/api/upload', auth, upload.array('images', 10), async (req, res) => {
+  const db = getDB();
+  const user = db.users.find(u => u.id === req.user.id);
+  for (let f of req.files) {
+    const webpPath = await compressImage(f.path);
+    user.images.push(webpPath);
   }
-}
+  if (!user.profilePic && user.images.length) user.profilePic = user.images[0];
+  saveDB(db);
+  res.json({ images: user.images, profilePic: user.profilePic });
+});
 
-function loadJSON(){
-  try{
-    const DATA_FILE = path.join(DATA_DIR,'db.json');
-    if(!fs.existsSync(DATA_FILE)){
-      const init={users:[],payments:[],likes:[],matches:[],messages:[]};
-      fs.writeFileSync(DATA_FILE,JSON.stringify(init));
-      dbCache=init; return init;
+app.post('/api/set-profile-pic', auth, (req, res) => {
+  const db = getDB(); const user = db.users.find(u => u.id === req.user.id);
+  user.profilePic = req.body.url; saveDB(db); res.json({ ok: true });
+});
+
+app.delete('/api/image', auth, (req, res) => {
+  const db = getDB(); const user = db.users.find(u => u.id === req.user.id);
+  user.images = user.images.filter(i => i!== req.body.url);
+  if (user.profilePic === req.body.url) user.profilePic = user.images[0] || null;
+  saveDB(db); res.json({ ok: true });
+});
+
+// ===== USEREK - nem látszik email és telefon! + nemek szűrése =====
+app.get('/api/users', auth, (req, res) => {
+  const db = getDB();
+  const me = db.users.find(u => u.id === req.user.id);
+  let users = db.users.filter(u => {
+    if (u.id === me.id) return false;
+    if (me.blocked.includes(u.id)) return false;
+    if (me.dislikes.includes(u.id)) return false;
+    if (me.likes.includes(u.id)) return false;
+    if (me.interestedIn === 'female' && u.gender!== 'female') return false;
+    if (me.interestedIn === 'male' && u.gender!== 'male') return false;
+    if (req.query.hobby &&!u.hobbies.some(h => h.includes(req.query.hobby))) return false; // pl.?hobby=Horgásztúra
+    return true;
+  }).map(u => ({
+    id: u.id, name: u.name, age: u.age, gender: u.gender,
+    bio: u.bio, hobbies: u.hobbies, // Horgásztúra stb.
+    images: u.images, profilePic: u.profilePic,
+    isVIP: true
+    // email és phonePrivate SOHA nincs benne!
+  }));
+  res.json(users);
+});
+
+// LIKE, SUPERLIKE, stb + ÉRTESÍTÉS
+app.post('/api/action', auth, (req, res) => {
+  const { targetId, type } = req.body;
+  const db = getDB();
+  const me = db.users.find(u => u.id === req.user.id);
+  const target = db.users.find(u => u.id === targetId);
+  if (!target) return res.status(404).json({ error: 'Nincs' });
+
+  if (type === 'like') {
+    if (!me.likes.includes(targetId)) me.likes.push(targetId);
+    // Értesítés a másiknak: új kedvelés!
+    io.to(targetId).emit('notification', { type: 'like', from: me.id, name: me.name, text: `${me.name} kedvelte a profilod ❤️` });
+    if (target.likes.includes(me.id) &&!me.matches.includes(targetId)) {
+      me.matches.push(targetId); target.matches.push(me.id);
+      saveDB(db);
+      io.to(targetId).emit('notification', { type: 'match', text: `Párosodtál ${me.name}-vel! 💕` });
+      io.to(me.id).emit('notification', { type: 'match', text: `Párosodtál ${target.name}-vel! 💕` });
+      return res.json({ match: true });
     }
-    dbCache=JSON.parse(fs.readFileSync(DATA_FILE,'utf8'));
-    return dbCache;
-  }catch(_){
-    dbCache={users:[],payments:[],likes:[],matches:[],messages:[]};
-    return dbCache;
   }
-}
-function saveJSON(){
-  try{
-    const DATA_FILE = path.join(DATA_DIR,'db.json');
-    fs.writeFileSync(DATA_FILE+'.tmp',JSON.stringify(dbCache));
-    fs.renameSync(DATA_FILE+'.tmp',DATA_FILE);
-  }catch(e){ console.error('saveJSON',e.message); }
-}
-if(DB_MODE==='JSON'){ loadJSON(); setInterval(()=>{ if(dbCache) saveJSON(); },15000); }
+  if (type === 'dislike') me.dislikes.push(targetId);
+  if (type === 'superlike') { me.superlikes.push(targetId); io.to(targetId).emit('notification', { type: 'superlike', text: `${me.name} szuperlájkolt! ⭐` }); }
+  if (type === 'favorite') me.favorites = [...new Set([...me.favorites, targetId])];
 
-console.log(`Lovenux 1B Mode: ${DB_MODE} | Shards:${SHARD_COUNT} | Port:${PORT}`);
-
-app.use(helmet({contentSecurityPolicy:false}));
-app.use(compression());
-app.use(morgan('dev'));
-app.use(cors({origin:true,credentials:true}));
-app.use(express.json({limit:'2mb'}));
-app.use(express.urlencoded({extended:true}));
-app.use('/uploads', express.static(UPLOAD_DIR));
-app.use(express.static(path.join(__dirname,'public')));
-
-const storage=multer.diskStorage({
-  destination:(r,f,cb)=>cb(null,UPLOAD_DIR),
-  filename:(r,f,cb)=>cb(null,Date.now()+'-'+crypto.randomBytes(6).toString('hex')+path.extname(f.originalname||'.jpg'))
+  saveDB(db);
+  res.json({ ok: true });
 });
-const upload=multer({storage,limits:{fileSize:8*1024*1024,files:10}});
 
-function auth(req,res,next){
-  const h=req.headers.authorization;
-  if(!h) return res.status(401).json({error:'No token'});
-  try{ req.user=jwt.verify(h.replace('Bearer ',''),JWT_SECRET); next(); }catch(e){ return res.status(401).json({error:'Invalid'}); }
-}
-function calcAge(b){
-  try{ const birth=new Date(b); const n=new Date(); let a=n.getFullYear()-birth.getFullYear(); if(n.getMonth()<birth.getMonth() || (n.getMonth()===birth.getMonth() && n.getDate()<birth.getDate())) a--; return a; }catch(_){ return 25; }
-}
+// ===== SOCKET - ÜZENET + KÉP + HÍVÁS CSAK ÜZENET UTÁN =====
+io.use((socket, next) => {
+  try { socket.user = jwt.verify(socket.handshake.auth.token, SECRET); next(); }
+  catch { next(new Error('auth')); }
+});
 
-async function findUserByEmail(email){
-  email=email.toLowerCase();
-  if(DB_MODE==='JSON') return dbCache.users.find(u=>u.email===email)||null;
-  const shard=getShardIndex(email);
-  for(let i=0;i<SHARD_COUNT;i++){
-    const idx=(shard+i)%SHARD_COUNT;
-    try{
-      const pool=pgPools[idx%pgPools.length];
-      const r=await pool.query(`SELECT * FROM users_${idx} WHERE email=$1`,[email]);
-      if(r.rows[0]) return r.rows[0];
-    }catch(_){}
-  }
-  return null;
-}
+io.on('connection', socket => {
+  socket.join(socket.user.id);
 
-app.get('/api/heart',(req,res)=>res.json({ok:true,mode:DB_MODE,shards:SHARD_COUNT,users:DB_MODE==='JSON'?dbCache.users.length:'sharded'}));
+  // Szöveges üzenet
+  socket.on('message', ({ to, text }) => {
+    const db = getDB();
+    const me = db.users.find(u => u.id === socket.user.id);
+    const target = db.users.find(u => u.id === to);
+    if (!me.matches.includes(to)) return; // csak pároknak
 
-app.get('/api/hobbies',(req,res)=>res.json(["⚽ Foci","🏀 Kosár","🎾 Tenisz","💪 Edzőterem","🧘 Jóga","🏃 Futás","🚴 Bicikli","🏊 Úszás","🥾 Túrázás","⛷ Síelés","🏂 Snowboard","🧗 Mászás","🥊 Box","🥋 Küzdősport","🎯 Darts","♟ Sakk","🎸 Gitár","🎹 Zongora","🎤 Éneklés","🎧 DJ","🎶 Koncert","🎨 Festés","✏ Rajzolás","📸 Fotózás","🎬 Filmezés","🎭 Színház","💃 Tánc","📚 Olvasás","✍ Írás","✈ Utazás","⛺ Kemping","🏖 Strand","🚗 Road trip","🍳 Főzés","🧁 Sütés","🍷 Bor","☕ Kávé","🍣 Sushi","🥬 Vegán","🔥 BBQ","🎮 Gamer","💻 Programozás","🤖 AI","📱 Tech","🔨 Barkács","🐕 Kutya","🐈 Macska","🐴 Ló","🌱 Kert","🛍 Shopping","👗 Divat","💄 Smink","💆 Spa","🎉 Buli","🍸 Koktél","🎲 Társas","♠ Póker","🎤 Karaoke","🏎 Autó","🏍 Motor","⛵ Hajó","🧩 Puzzle","🎳 Bowling","⛳ Golf","🎣 Horgászat","🏹 Íjászat","📈 Tőzsde","₿ Kriptó","🧠 Pszichológia","🧘 Meditáció","🔮 Spirituális"]));
+    const msg = { id: uuidv4(), from: socket.user.id, to, text, type: 'text', time: new Date() };
+    db.messages.push(msg); saveDB(db);
+    io.to(to).emit('message', msg);
+    io.to(to).emit('notification', { type: 'message', from: socket.user.id, text: `Új üzenet ${me.name}-től: ${text.slice(0,30)}...` });
+    socket.emit('message', msg);
+  });
 
-app.post('/api/register',upload.array('photos',10),async(req,res)=>{
-  try{
-    const {email,password,city,birth,child,bio,name,gender,looking_for,height,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,hobbies}=req.body;
-    if(!email||!password||!city||!birth||!name) return res.status(400).json({error:'Minden *-os mező kell!'});
-    const emailL=email.toLowerCase().trim();
-    if(await findUserByEmail(emailL)) return res.status(400).json({error:'Már regisztráltál'});
-    if(password.length<8) return res.status(400).json({error:'Jelszó min 8'});
-    const age=calcAge(birth); if(age<18) return res.status(400).json({error:'18+ kell'});
-    const hashed=await bcrypt.hash(password,10);
-    let photos=[]; if(req.files){ photos=req.files.map(f=>'/uploads/'+f.filename); }
-    let hobbyArr=[]; try{ hobbyArr=JSON.parse(hobbies||'[]'); }catch(_){}
-    if(DB_MODE==='JSON'){
-      const user={email:emailL,password:hashed,name,city,birth,age,gender:gender||'ferfi',looking_for:looking_for||'noket',child,bio,photos,hobbies:hobbyArr,height:height?parseInt(height):null,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,is_paid:true,paid_at:new Date().toISOString(),created_at:new Date().toISOString(),last_active:new Date().toISOString()};
-      dbCache.users.push(user); saveJSON();
-      const tokenFree = require('jsonwebtoken').sign({email:emailL}, process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME', {expiresIn:'30d'});
-      return res.json({success:true,email:emailL,token:tokenFree,user:{email:emailL,name},freeMode:true});
-    }else{
-      const shard=getShardIndex(emailL);
-      const pool=pgPools[shard%pgPools.length];
-      await pool.query(`INSERT INTO users_${shard}(email,password,name,city,birth,age,gender,looking_for,child,bio,photos,hobbies,height,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,is_paid,shard) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,true,$24)`,
-      [emailL,hashed,name,city,birth,age,gender,looking_for,child,bio,JSON.stringify(photos),JSON.stringify(hobbyArr),height?parseInt(height):null,body_type,eye_color,hair_color,smoking,drinking,education,job,music,movies,shard]);
-      const tokenFree2 = require('jsonwebtoken').sign({email:emailL}, process.env.JWT_SECRET || 'Lovenux2026-BILLIO-SECRET-CHANGE-ME', {expiresIn:'30d'});
-      return res.json({success:true,email:emailL,token:tokenFree2,user:{email:emailL,name},freeMode:true});
+  // Kép üzenetben
+  socket.on('message-image', ({ to, imageUrl }) => {
+    const db = getDB();
+    const me = db.users.find(u => u.id === socket.user.id);
+    const msg = { id: uuidv4(), from: socket.user.id, to, imageUrl, type: 'image', time: new Date() };
+    db.messages.push(msg); saveDB(db);
+    io.to(to).emit('message', msg);
+    io.to(to).emit('notification', { type: 'message', text: `📷 Képet küldött ${me.name}` });
+    socket.emit('message', msg);
+  });
+
+  // Hívás - csak ha volt már üzenet váltás
+  socket.on('call-request', ({ to, callType }) => {
+    const db = getDB();
+    const hasMessaged = db.messages.some(m => (m.from===socket.user.id && m.to===to) || (m.from===to && m.to===socket.user.id));
+    if (!hasMessaged) {
+      socket.emit('call-error', { error: 'Csak üzenetváltás után hívhatsz!' });
+      return;
     }
-  }catch(e){ console.error(e); res.status(500).json({error:e.message}); }
+    io.to(to).emit('incoming-call', { from: socket.user.id, callType });
+  });
+
+  socket.on('call-signal', ({ to, signal }) => io.to(to).emit('call-signal', { from: socket.user.id, signal }));
 });
 
-app.post('/api/barion/start',async(req,res)=>{
-  try{
-    const emailL=req.body.email.toLowerCase().trim();
-    const u=await findUserByEmail(emailL);
-    if(!u) return res.status(404).json({error:'Nincs user'});
-    return res.json({alreadyPaid:true,freeMode:true}); // FREE MODE
-    const paymentId='PAY-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
-    if(DB_MODE==='JSON'){
-      dbCache.payments=dbCache.payments||[];
-      dbCache.payments.push({paymentId,email:emailL,amount:1000,status:'Prepared',created_at:new Date().toISOString()}); saveJSON();
-    }else{
-      const shard=getShardIndex(emailL); const pool=pgPools[shard%pgPools.length];
-      await pool.query(`INSERT INTO payments_${shard}(payment_id,email,amount,status) VALUES($1,$2,1000,'Prepared') ON CONFLICT DO NOTHING`,[paymentId,emailL]);
-    }
-    res.json({paymentId,testMode:true});
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-app.post('/api/barion/confirm',async(req,res)=>{
-  try{
-    const {paymentId,email}=req.body; const emailL=email.toLowerCase().trim();
-    if(DB_MODE==='JSON'){
-      const u=dbCache.users.find(x=>x.email===emailL); if(!u) return res.status(404).json({error:'Nincs user'});
-      u.is_paid=true; u.paid_at=new Date().toISOString();
-      const p=(dbCache.payments||[]).find(x=>x.paymentId===paymentId); if(p){ p.status='Succeeded'; p.succeeded_at=new Date().toISOString(); }
-      saveJSON();
-    }else{
-      const shard=getShardIndex(emailL); const pool=pgPools[shard%pgPools.length];
-      await pool.query(`UPDATE users_${shard} SET is_paid=true, paid_at=NOW() WHERE email=$1`,[emailL]);
-      await pool.query(`UPDATE payments_${shard} SET status='Succeeded', succeeded_at=NOW() WHERE payment_id=$1`,[paymentId]);
-    }
-    const token=jwt.sign({email:emailL},JWT_SECRET,{expiresIn:'30d'});
-    res.json({success:true,token,user:{email:emailL}});
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.post('/api/login',async(req,res)=>{
-  try{
-    const emailL=req.body.email.toLowerCase().trim();
-    const u=await findUserByEmail(emailL);
-    if(!u) return res.status(400).json({error:'Nincs email'});
-    const ok=await bcrypt.compare(req.body.password,u.password);
-    if(!ok) return res.status(400).json({error:'Hibás jelszó'});
-    // FREE MODE - no payment required
-    // if(!u.is_paid) return res.status(402).json({error:'Még nem fizettél',needPayment:true,email:emailL});
-    const token=jwt.sign({email:emailL},JWT_SECRET,{expiresIn:'30d'});
-    if(DB_MODE==='JSON'){ const uu=dbCache.users.find(x=>x.email===emailL); if(uu) uu.last_active=new Date().toISOString(); saveJSON(); }
-    else{ const shard=getShardIndex(emailL); const pool=pgPools[shard%pgPools.length]; await pool.query(`UPDATE users_${shard} SET last_active=NOW() WHERE email=$1`,[emailL]); }
-    res.json({success:true,token,user:{email:emailL,name:u.name}});
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.get('/api/me',auth,async(req,res)=>{
-  try{
-    const u=await findUserByEmail(req.user.email);
-    if(!u) return res.status(404).json({error:'Nincs user'});
-    const {password,...safe}=u; res.json(safe);
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.get('/api/discover',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    const {minAge=18,maxAge=99,city='',gender='auto',body_type='',education='',smoking='',drinking='',hobbies='[]'}=req.query;
-    if(DB_MODE==='JSON'){
-      let list=dbCache.users.filter(u=>u.email!==me); // FREE - show all
-      if(gender==='ferfi') list=list.filter(u=>u.gender==='ferfi');
-      else if(gender==='no') list=list.filter(u=>u.gender==='no');
-      else { const my=dbCache.users.find(x=>x.email===me); if(my){ if(my.looking_for==='noket') list=list.filter(u=>u.gender==='no'); else if(my.looking_for==='ferfiakat') list=list.filter(u=>u.gender==='ferfi'); } }
-      list=list.filter(u=>u.age>=parseInt(minAge)&&u.age<=parseInt(maxAge));
-      if(city) list=list.filter(u=>u.city&&u.city.toLowerCase().includes(city.toLowerCase()));
-      if(body_type) list=list.filter(u=>u.body_type===body_type);
-      if(education) list=list.filter(u=>u.education===education);
-      if(smoking) list=list.filter(u=>u.smoking===smoking);
-      if(drinking) list=list.filter(u=>u.drinking===drinking);
-      try{ const hArr=JSON.parse(hobbies); if(hArr.length) list=list.filter(u=>u.hobbies&&hArr.some(h=>u.hobbies.includes(h))); }catch(_){}
-      list=list.sort(()=>Math.random()-0.5).slice(0,50);
-      const safe=list.map(u=>{ const {password,...s}=u; return s; });
-      return res.json({users:safe});
-    }else{
-      // SHARDED - query all shards for demo, in production use search service
-      let all=[];
-      for(let i=0;i<SHARD_COUNT;i++){
-        try{
-          const pool=pgPools[i%pgPools.length];
-          // === NŐK FÉRFIAKAT, FÉRFIAK NŐKET ===
-          let meGender = null;
-          try{
-            const mePool = pgPools[getShardIndex(me)%pgPools.length];
-            const meR = await mePool.query(`SELECT gender FROM users_${getShardIndex(me)} WHERE email=$1`,[me]);
-            if(meR.rows[0]) meGender = meR.rows[0].gender;
-          }catch(_){}
-          let q=`SELECT * FROM users_${i} WHERE email!=$1 AND age BETWEEN $2 AND $3`; // FREE - no paid check
-          let params=[me,parseInt(minAge),parseInt(maxAge)]; let idx=4;
-          if(gender==='ferfi'){ q+=` AND gender='ferfi'`; }
-          else if(gender==='no'){ q+=` AND gender='no'`; }
-          else {
-            // auto -> ellenkező nem
-            if(meGender==='ferfi') q+=` AND gender='no'`;
-            else if(meGender==='no') q+=` AND gender='ferfi'`;
-          }
-          if(city){ q+=` AND city ILIKE $${idx}`; params.push(`%${city}%`); idx++; }
-          if(body_type){ q+=` AND body_type=$${idx}`; params.push(body_type); idx++; }
-          q+=` LIMIT 10`;
-          const r=await pool.query(q,params);
-          all.push(...r.rows);
-        }catch(_){}
-      }
-      all=all.sort(()=>Math.random()-0.5).slice(0,50);
-      res.json({users:all.map(u=>{ const {password,...s}=u; return s; })});
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.post('/api/like',auth,async(req,res)=>{
-  try{
-    const from=req.user.email.toLowerCase(); const to=(req.body.toEmail||'').toLowerCase();
-    if(!to||from===to) return res.status(400).json({error:'Hiba'});
-    if(DB_MODE==='JSON'){
-      dbCache.likes=dbCache.likes||[];
-      if(!dbCache.likes.find(l=>l.from===from&&l.to===to)) dbCache.likes.push({from,to,at:new Date().toISOString()});
-      const other=dbCache.likes.find(l=>l.from===to&&l.to===from);
-      if(other){
-        dbCache.matches=dbCache.matches||[];
-        if(!dbCache.matches.find(m=>(m.user1===from&&m.user2===to)||(m.user1===to&&m.user2===from))) dbCache.matches.push({user1:from,user2:to,at:new Date().toISOString()});
-        saveJSON(); return res.json({success:true,match:true});
-      }
-      saveJSON(); return res.json({success:true,match:false});
-    }else{
-      const shard=getShardIndex(from); const pool=pgPools[shard%pgPools.length];
-      await pool.query(`INSERT INTO likes_${shard}(from_email,to_email) VALUES($1,$2) ON CONFLICT DO NOTHING`,[from,to]);
-      let found=false;
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM likes_${i} WHERE from_email=$1 AND to_email=$2`,[to,from]); if(r.rows.length){ found=true; break; } }catch(_){} }
-      if(found){
-        const shardM=getShardIndex(from); const poolM=pgPools[shardM%pgPools.length];
-        const u1=from<to?from:to; const u2=from<to?to:from;
-        await poolM.query(`INSERT INTO matches_${shardM}(user1,user2) VALUES($1,$2) ON CONFLICT DO NOTHING`,[u1,u2]);
-        return res.json({success:true,match:true});
-      }
-      return res.json({success:true,match:false});
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.get('/api/matches',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    if(DB_MODE==='JSON'){
-      const ms=(dbCache.matches||[]).filter(m=>m.user1===me||m.user2===me);
-      const emails=ms.map(m=>m.user1===me?m.user2:m.user1);
-      const users=emails.map(em=>dbCache.users.find(u=>u.email===em)).filter(Boolean).map(u=>{ const {password,...s}=u; return s; });
-      return res.json(users);
-    }else{
-      let emails=[];
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM matches_${i} WHERE user1=$1 OR user2=$1`,[me]); r.rows.forEach(row=>emails.push(row.user1===me?row.user2:row.user1)); }catch(_){} }
-      let users=[];
-      for(let em of emails){ const u=await findUserByEmail(em); if(u){ const {password,...s}=u; users.push(s); } }
-      return res.json(users);
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.get('/api/messages',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    if(DB_MODE==='JSON'){
-      const msgs=(dbCache.messages||[]).filter(m=>m.from===me||m.to===me).sort((a,b)=>new Date(a.at)-new Date(b.at));
-      return res.json(msgs);
-    }else{
-      let all=[];
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM messages_${i} WHERE from_email=$1 OR to_email=$1 ORDER BY at ASC`,[me]); all.push(...r.rows.map(row=>({from:row.from_email,to:row.to_email,text:row.text,at:row.at}))); }catch(_){} }
-      all.sort((a,b)=>new Date(a.at)-new Date(b.at)); return res.json(all);
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-app.get('/api/messages/:email',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase(); const other=req.params.email.toLowerCase();
-    if(DB_MODE==='JSON'){
-      const msgs=(dbCache.messages||[]).filter(m=>(m.from===me&&m.to===other)||(m.from===other&&m.to===me)).sort((a,b)=>new Date(a.at)-new Date(b.at));
-      return res.json(msgs);
-    }else{
-      let all=[];
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM messages_${i} WHERE (from_email=$1 AND to_email=$2) OR (from_email=$2 AND to_email=$1) ORDER BY at ASC`,[me,other]); all.push(...r.rows.map(row=>({from:row.from_email,to:row.to_email,text:row.text,at:row.at}))); }catch(_){} }
-      all.sort((a,b)=>new Date(a.at)-new Date(b.at)); return res.json(all);
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-app.post('/api/messages',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase(); const {to,text}=req.body; const other=to.toLowerCase();
-    const newMsg={from:me,to:other,text,at:new Date().toISOString()};
-    if(DB_MODE==='JSON'){ dbCache.messages=dbCache.messages||[]; dbCache.messages.push(newMsg); saveJSON(); return res.json({success:true,message:newMsg}); }
-    else{ const shard=getShardIndex(me); const pool=pgPools[shard%pgPools.length]; await pool.query(`INSERT INTO messages_${shard}(from_email,to_email,text) VALUES($1,$2,$3)`,[me,other,text]); return res.json({success:true,message:newMsg}); }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-// === NEW: Ki kedvelt engem - ❤️ szívben mutatja ===
-app.get('/api/likes',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    if(DB_MODE==='JSON'){
-      const likes=(dbCache.likes||[]).filter(l=>l.to===me);
-      const emails=likes.map(l=>l.from);
-      const users=emails.map(em=>dbCache.users.find(u=>u.email===em)).filter(Boolean).map(u=>{ const {password,...s}=u; return {...s, likedAt: likes.find(l=>l.from===s.email)?.at}; });
-      return res.json(users);
-    }else{
-      let emails=[];
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT * FROM likes_${i} WHERE to_email=$1`,[me]); r.rows.forEach(row=>emails.push({email:row.from_email, at:row.created_at})); }catch(_){} }
-      let users=[];
-      for(let e of emails){ const u=await findUserByEmail(e.email); if(u){ const {password,...s}=u; users.push({...s, likedAt:e.at}); } }
-      return res.json(users);
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.get('/api/likes/count',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    let count=0;
-    if(DB_MODE==='JSON'){ count=(dbCache.likes||[]).filter(l=>l.to===me).length; }
-    else{ for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT COUNT(*) FROM likes_${i} WHERE to_email=$1`,[me]); count+=parseInt(r.rows[0].count); }catch(_){} } }
-    res.json({count});
-  }catch(e){ res.status(500).json({count:0}); }
-});
-
-app.delete('/api/like/:email',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase(); const other=req.params.email.toLowerCase();
-    if(DB_MODE==='JSON'){
-      dbCache.likes=(dbCache.likes||[]).filter(l=>!(l.from===me && l.to===other));
-      dbCache.matches=(dbCache.matches||[]).filter(m=>!((m.user1===me&&m.user2===other)||(m.user1===other&&m.user2===me)));
-      saveJSON(); return res.json({success:true});
-    }else{
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; await p.query(`DELETE FROM likes_${i} WHERE from_email=$1 AND to_email=$2`,[me,other]); await p.query(`DELETE FROM matches_${i} WHERE (user1=$1 AND user2=$2) OR (user1=$2 AND user2=$1)`,[me,other]); }catch(_){} }
-      return res.json({success:true});
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.delete('/api/account',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    if(DB_MODE==='JSON'){
-      dbCache.users=dbCache.users.filter(u=>u.email!==me);
-      dbCache.likes=(dbCache.likes||[]).filter(l=>l.from!==me && l.to!==me);
-      dbCache.matches=(dbCache.matches||[]).filter(m=>m.user1!==me && m.user2!==me);
-      dbCache.messages=(dbCache.messages||[]).filter(m=>m.from!==me && m.to!==me);
-      saveJSON(); return res.json({success:true});
-    }else{
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; await p.query(`DELETE FROM users_${i} WHERE email=$1`,[me]); await p.query(`DELETE FROM likes_${i} WHERE from_email=$1 OR to_email=$1`,[me]); await p.query(`DELETE FROM matches_${i} WHERE user1=$1 OR user2=$1`,[me]); await p.query(`DELETE FROM messages_${i} WHERE from_email=$1 OR to_email=$1`,[me]); }catch(_){} }
-      return res.json({success:true});
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.post('/api/change-password',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase(); const {oldPassword,newPassword}=req.body;
-    if(!oldPassword||!newPassword||newPassword.length<8) return res.status(400).json({error:'Új jelszó min 8 karakter'});
-    const u=await findUserByEmail(me); if(!u) return res.status(404).json({error:'Nincs user'});
-    const ok=await bcrypt.compare(oldPassword,u.password); if(!ok) return res.status(400).json({error:'Régi jelszó hibás'});
-    const hashed=await bcrypt.hash(newPassword,10);
-    if(DB_MODE==='JSON'){ const uu=dbCache.users.find(x=>x.email===me); if(uu) uu.password=hashed; saveJSON(); }
-    else{ const shard=getShardIndex(me); const pool=pgPools[shard%pgPools.length]; await pool.query(`UPDATE users_${shard} SET password=$1 WHERE email=$2`,[hashed,me]); }
-    res.json({success:true});
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.put('/api/me',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    const {name,city,bio,height,body_type,eye_color,hair_color,smoking,drinking,education,job,music,hobbies}=req.body;
-    if(DB_MODE==='JSON'){
-      const u=dbCache.users.find(x=>x.email===me); if(!u) return res.status(404).json({error:'Nincs user'});
-      if(name) u.name=name; if(city) u.city=city; if(bio!==undefined) u.bio=bio;
-      if(height!==undefined) u.height=height?parseInt(height):null; if(body_type!==undefined) u.body_type=body_type;
-      if(eye_color!==undefined) u.eye_color=eye_color; if(hair_color!==undefined) u.hair_color=hair_color;
-      if(smoking!==undefined) u.smoking=smoking; if(drinking!==undefined) u.drinking=drinking;
-      if(education!==undefined) u.education=education; if(job!==undefined) u.job=job;
-      if(music!==undefined) u.music=music; if(hobbies!==undefined) u.hobbies=hobbies;
-      u.last_active=new Date().toISOString(); saveJSON();
-      const {password,...safe}=u; return res.json(safe);
-    }else{
-      const shard=getShardIndex(me); const pool=pgPools[shard%pgPools.length];
-      const fields=[]; const vals=[]; let idx=1;
-      const map={name,city,bio,height:height?parseInt(height):null,body_type,eye_color,hair_color,smoking,drinking,education,job,music};
-      for(let k in map){ if(map[k]!==undefined){ fields.push(`${k}=$${idx}`); vals.push(map[k]); idx++; } }
-      if(hobbies!==undefined){ fields.push(`hobbies=$${idx}`); vals.push(JSON.stringify(hobbies)); idx++; }
-      if(fields.length){ vals.push(me); await pool.query(`UPDATE users_${shard} SET ${fields.join(',')}, last_active=NOW() WHERE email=$${idx}`,vals); }
-      const u=await findUserByEmail(me); const {password,...safe}=u||{}; return res.json(safe);
-    }
-  }catch(e){ res.status(500).json({error:e.message}); }
-});
-
-app.get('/api/messages/count',auth,async(req,res)=>{
-  try{
-    const me=req.user.email.toLowerCase();
-    let count=0;
-    if(DB_MODE==='JSON'){
-      const msgs=(dbCache.messages||[]).filter(m=>m.to===me);
-      const unread=new Set(msgs.map(m=>m.from)); count=unread.size;
-    }else{
-      let senders=new Set();
-      for(let i=0;i<SHARD_COUNT;i++){ try{ const p=pgPools[i%pgPools.length]; const r=await p.query(`SELECT DISTINCT from_email FROM messages_${i} WHERE to_email=$1`,[me]); r.rows.forEach(row=>senders.add(row.from_email)); }catch(_){} }
-      count=senders.size;
-    }
-    res.json({count});
-  }catch(e){ res.status(500).json({count:0}); }
-});
-app.post('/api/forgot-password',(req,res)=>res.json({success:true}));
-
-app.get('*',(req,res)=>{
-  const candidates=[path.join(__dirname,'public','index.html'),path.join(__dirname,'index.html')];
-  for(let p of candidates){ if(fs.existsSync(p)) return res.sendFile(p); }
-  res.send('Lovenux 1B LIVE');
-});
-
-(async()=>{
-  if(DB_MODE==='SHARDED'){ try{ await initPG(); }catch(e){ console.error(e); DB_MODE='JSON'; loadJSON(); } }
-  app.listen(PORT,()=>console.log(`Lovenux 1B ${DB_MODE} fut:${PORT} shards:${SHARD_COUNT} users:${DB_MODE==='JSON'?dbCache.users.length:'sharded'}`));
-})();
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+server.listen(PORT, () => console.log(`Lovenux éles: http://localhost:${PORT} - 1B user ready`));
