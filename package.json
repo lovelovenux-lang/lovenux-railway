@@ -1,24 +1,28 @@
 {
-  "name": "lovenux-randiapp",
-  "version": "3.0.0",
-  "description": "Lovenux - 1B user ready, Badoo stilus",
+  "name": "lovenux-v2",
+  "version": "2.0.0",
+  "description": "Lovenux - 1B users scalable, Barion, hetero, privacy",
   "main": "server.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node server.js",
+    "start:cluster": "node server.js --cluster",
     "dev": "nodemon server.js"
   },
-  "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
-    "sharp": "^0.33.0",
-    "socket.io": "^4.7.5",
-    "uuid": "^9.0.1"
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "cors": "^2.8.5",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^9.0.0",
+    "axios": "^1.6.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "helmet": "^7.1.0",
+    "compression": "^1.7.4",
+    "express-rate-limit": "^7.1.5",
+    "dotenv": "^16.3.1"
   }
 }
