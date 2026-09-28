@@ -2,7 +2,7 @@
 <html lang="hu">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
 <title>Lovenux - Ahol bejön az élet</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
@@ -21,7 +21,11 @@
 .info-val{font-size:12px; font-weight:700; color:#2a1a5a}
 .btn-pink{background:linear-gradient(90deg,#ec4899,#ff5a8a); color:white}
 .btn-yellow{background:linear-gradient(90deg,#facc15,#fbbf24); color:#422006; font-weight:800}
-.hide-scrollbar::-webkit-scrollbar{display:none}
+@media(max-width:768px){
+  .mobile-profile-img{height:62vh !important; min-height:420px; width:100%; object-fit:cover; object-position:top center}
+  #mainContent{padding:0 !important}
+}
+.swipe-card{touch-action:pan-y}
 </style>
 </head>
 <body class="bg-[#f5f3ff] text-[#111] antialiased">
@@ -32,11 +36,8 @@ const REL=['Egyedülálló','Kapcsolatban','Bonyolult','Házas de nem működik'
 const CHILD=['Nincs gyerek','Van gyerek - nálam','Van gyerek - nem nálam','Szeretnék gyereket','Nem szeretnék gyereket','Majd később'];
 const BODY=['Vékony','Átlagos','Sportos','Izmos','Telt','Molett'];
 const EDU=['Általános iskola','Szakmunkás','Érettségi','Főiskola / Egyetem','Mester / Doktori'];
-const HOBBIES=['Futás','Főzés','Utazás','Gasztro','Zene','Mozi','Edzés','Túrázás','Olvasás','Gaming','Fotózás','Könyv','Természet','Állatok','Művészet','Bor','Kávé','Jóga','Bulizás','Sport','Séta','Kert','Auto','Motor'];
+const HOBBIES=['Futás','Főzés','Utazás','Gasztro','Zene','Mozi','Edzés','Túrázás','Olvasás','Gaming','Fotózás','Könyv','Természet','Állatok','Művészet','Bor','Kávé','Jóga','Bulizás','Sport','Séta'];
 const GIFTS=[{icon:'🌹',name:'Rózsa'},{icon:'🍫',name:'Csoki'},{icon:'💎',name:'Gyémánt'},{icon:'🧸',name:'Maci'},{icon:'💋',name:'Puszi'},{icon:'🥂',name:'Pezsgő'}];
-
-// JAVÍTÁS: currentUser induláskor NULL, nem auto-login -> első oldal mindig belépés/regisztráció
-// képek megmaradása külön tárolóban
 let currentUser=null;
 let savedProfiles=JSON.parse(localStorage.getItem('lovenux_saved_profiles')||'{}');
 let isLoggedIn = localStorage.getItem('lovenux_isLoggedIn')==='true';
@@ -57,18 +58,14 @@ function savePersistentProfile(){
  try{ if(socket) socket.emit('updateProfilePic',{userId:currentUser.id, profilePic:currentUser.profilePic, images:currentUser.images}); }catch{}
 }
 window.addEventListener('beforeunload', savePersistentProfile);
-window.addEventListener('pagehide', savePersistentProfile);
-
 let users=[], filteredUsers=[], swipeIndex=0, activeTab='fooldal', activeChat=null;
 let messages=JSON.parse(localStorage.getItem('lovenux_v2_msgs')||'{}');
 let likes=JSON.parse(localStorage.getItem('lovenux_v2_likes')||'[]');
 let likedBy=JSON.parse(localStorage.getItem('lovenux_likedBy')||'[]');
 let favorites=JSON.parse(localStorage.getItem('lovenux_v2_fav')||'[]');
-let blocks=JSON.parse(localStorage.getItem('lovenux_v2_blocks')||'[]');
 let notifications=JSON.parse(localStorage.getItem('lovenux_notif')||'[]');
 let spotlightData=[], spotlightWaiting=[], spotlightTopMale=null, spotlightTopFemale=null, spotlightDuels=[];
 let socket=null;
-
 function initSocket(){
  if(!currentUser) return;
  try{ socket=io(); }catch{ return; }
@@ -85,10 +82,9 @@ function initSocket(){
  socket.on('match', ()=>{ addNotif('💕 Új randi!!','match'); });
  socket.on('giftReceived', g=>{ addNotif('🎁 '+g.gift.icon+' '+g.gift.name,'gift'); });
  socket.on('spotlightUpdate', ()=>loadSpotlight());
- socket.on('spotlightVote', ()=>loadSpotlight());
 }
 function addNotif(text,type){
- const allowed=['match','message','gift','call','likedYou'];
+ const allowed=['match','message','gift','likedYou'];
  if(!allowed.includes(type)) return;
  if(notifications[0] && notifications[0].text===text && Date.now()-notifications[0].ts<120000) return;
  notifications.unshift({id:Date.now(), ts:Date.now(), text, type, at:new Date().toLocaleTimeString()});
@@ -98,8 +94,7 @@ function addNotif(text,type){
 async function fetchUsers(){
  try{ const res=await fetch('/api/users'); users=await res.json(); }catch{
   users=[
-   {id:'u2', name:'Anna, 27', age:27, gender:'Nő', lookingFor:'Férfi', location:'Budapest', bio:'Szia! Anna vagyok, szeretek futni és új helyeket felfedezni. Keresem azt, aki mellett őszinte lehetek. Ha szereted a nevetést és a kalandokat, írj 😉', hobbies:['Futás','Főzés','Utazás'], profilePic:'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&q=80', images:['https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&q=80'], relationshipStatus:'Egyedülálló', childrenStatus:'Nincs gyerek', height:168, bodyType:'Sportos', education:'Egyetem', eye:'Kék', hair:'Szőke', job:'Marketing', smoke:'Nem dohányzom', drink:'Alkalmi', pet:'Pog', isVIP:true, isOnline:true},
-   {id:'u3', name:'Dávid, 29', age:29, gender:'Férfi', lookingFor:'Nő', location:'Szeged', bio:'Bringa, edzés.', hobbies:['Edzés'], profilePic:'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&q=80', images:['https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&q=80'], relationshipStatus:'Egyedülálló', childrenStatus:'Nincs gyerek', height:182, bodyType:'Sportos', education:'Érettségi', eye:'Barna', hair:'Barna', job:'IT', isVIP:true, isOnline:true},
+   {id:'u2', name:'Anna, 24', age:24, gender:'Nő', lookingFor:'Férfi', location:'Budapest, V.', bio:'Kávé, nevetés.', hobbies:['Utazás'], profilePic:'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&q=80', images:['https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&q=80'], relationshipStatus:'Egyedülálló', childrenStatus:'Nincs gyerek', height:168, bodyType:'Átlagos', education:'Egyetem', eye:'Kék', hair:'Szőke', job:'Marketing', smoke:'Nem dohányzom', drink:'Alkalmi', pet:'Pog', isVIP:true, isOnline:true},
   ];
  }
  applyFilter();
@@ -110,7 +105,7 @@ function applyFilter(){
  if(currentUser.lookingFor==='Nő' || currentUser.lookingFor==='Nőket') target='Nő';
  else if(currentUser.lookingFor==='Férfi' || currentUser.lookingFor==='Férfiakat') target='Férfi';
  else target=currentUser.gender==='Nő'?'Férfi':'Nő';
- filteredUsers=users.filter(u=>u.gender===target && u.id!==currentUser.id && !blocks.includes(u.id));
+ filteredUsers=users.filter(u=>u.gender===target && u.id!==currentUser.id);
  if(filteredUsers.length===0) filteredUsers=users.filter(u=>u.id!==currentUser.id);
 }
 function fileToBase64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
@@ -118,17 +113,12 @@ async function register(fd){
  try{
   const res=await fetch('/api/register',{method:'POST', body:fd});
   const data=await res.json();
-  if(data.user){
-    currentUser=data.user;
-    localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser));
-    localStorage.setItem('lovenux_isLoggedIn','true');
-    savePersistentProfile();
-    location.reload();
-  } else alert(data.message||'Hiba');
+  if(data.user){ currentUser=data.user; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); localStorage.setItem('lovenux_isLoggedIn','true'); savePersistentProfile(); location.reload(); }
+  else alert(data.message||'Hiba');
  }catch(e){ alert('Hiba: '+e.message); }
 }
 async function loadSpotlight(){
- try{ const r=await fetch('/api/spotlight'); const d=await r.json(); spotlightData=d.active||[]; spotlightWaiting=d.waiting||[]; spotlightTopMale=d.topMale; spotlightTopFemale=d.topFemale; spotlightDuels=d.duels||[]; if(activeTab==='rivaldafeny') render(); }catch{}
+ try{ const r=await fetch('/api/spotlight'); const d=await r.json(); spotlightData=d.active||[]; spotlightWaiting=d.waiting||[]; spotlightTopMale=d.topMale; spotlightTopFemale=d.topFemale; spotlightDuels=d.duels||[]; }catch{}
 }
 function render(){ const root=document.getElementById('app'); if(!currentUser){ root.innerHTML=renderLanding(); bindLanding(); return; } root.innerHTML=renderMain(); bindMain(); checkBarion(); }
 function renderLanding(){
@@ -166,13 +156,8 @@ function bindLanding(){
   try{
    const res=await fetch('/api/login',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password:pass})});
    const data=await res.json();
-   if(data.user){
-     currentUser=data.user;
-     localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser));
-     localStorage.setItem('lovenux_isLoggedIn','true');
-     savePersistentProfile();
-     location.reload();
-   } else alert(data.message||'Hiba');
+   if(data.user){ currentUser=data.user; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); localStorage.setItem('lovenux_isLoggedIn','true'); savePersistentProfile(); location.reload(); }
+   else alert(data.message||'Hiba');
   }catch{ alert('Nincs ilyen felhasználó'); }
  });
  document.getElementById('r_submit')?.addEventListener('click', ()=>{
@@ -199,169 +184,120 @@ function bindLanding(){
 function renderMain(){
  const cur = filteredUsers[swipeIndex % filteredUsers.length] || users[0];
  const leftNav = `
-      <button data-tab="fooldal" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='fooldal'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">🏠 Főoldal</button>
-      <button data-tab="parositasok" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='parositasok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">💞 Párosítások <span class="ml-auto px-2 py-0.5 rounded-full bg-[#ff2e93] text-white text-[10px]">${likes.length+likedBy.length}</span></button>
-      <button data-tab="rivaldafeny" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='rivaldafeny'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">👑 Rivaldafény <span class="ml-auto text-[10px] opacity-60">${spotlightData.length}/100</span></button>
-      <button data-tab="ujsag" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='ujsag'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">📰 Újság</button>
-      <button data-tab="radio" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='radio'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">📻 Rádió</button>
-      <button data-tab="kartyajatekok" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='kartyajatekok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">🎴 Kártyajátékok</button>
-      <button data-tab="poker" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='poker'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">♠️ Poker</button>
-      <button data-tab="profilom" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='profilom'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">👤 Profilom</button>
-      <button data-tab="kedvenceim" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='kedvenceim'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">❤️ Kedvenceim</button>
-      <button data-tab="latogatok" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='latogatok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">👁️ Látogatók</button>
-      <button data-tab="beallitasok" class="flex items-center gap-3 px-3 h-[38px] rounded-[12px] text-[12px] font-bold ${activeTab==='beallitasok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">⚙️ Beállítások</button>
-      <div class="mt-4 rounded-[16px] bg-gradient-to-br from-[#a855f7] to-[#ff2e93] p-4 text-white text-center">
-        <div class="text-[24px]">👑</div>
-        <div class="font-bold text-[11px] mt-1">Legyél te is a rivaldafényben!</div>
-        <button data-tab="rivaldafeny" class="mt-2 px-3 h-7 rounded-full bg-white text-black text-[10px] font-bold">Told meg többel!</button>
-      </div>`;
+      <button data-tab="fooldal" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='fooldal'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">🏠 Főoldal</button>
+      <button data-tab="parositasok" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='parositasok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">💞 Párosítások <span class="ml-auto px-2 py-0.5 rounded-full bg-[#ff2e93] text-white text-[10px]">${likes.length+likedBy.length}</span></button>
+      <button data-tab="rivaldafeny" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='rivaldafeny'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">👑 Rivaldafény <span class="ml-auto text-[10px] opacity-60">${spotlightData.length}/100</span></button>
+      <button data-tab="ujsag" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='ujsag'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">📰 Újság</button>
+      <button data-tab="radio" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='radio'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">📻 Rádió</button>
+      <button data-tab="kartyajatekok" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='kartyajatekok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">🎴 Kártyajátékok</button>
+      <button data-tab="poker" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='poker'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">♠️ Poker</button>
+      <button data-tab="profilom" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='profilom'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">👤 Profilom</button>
+      <button data-tab="kedvenceim" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='kedvenceim'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">❤️ Kedvenceim</button>
+      <button data-tab="latogatok" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='latogatok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">👁️ Látogatók</button>
+      <button data-tab="beallitasok" class="flex items-center gap-3 px-3 h-[44px] rounded-[12px] text-[13px] font-bold ${activeTab==='beallitasok'?'bg-[#a855f7]/30 text-white':'text-white/80 hover:bg-white/10'}">⚙️ Beállítások</button>`;
 
- if(activeTab==='rivaldafeny'){
-  return `<div class="min-h-screen bg-[#f5f3ff] flex flex-col">
-   <div class="love-top h-[48px] flex items-center px-4 justify-between text-white"><div class="flex items-center gap-2 font-black text-[18px]"><span>💜</span><span class="brand">Lovenux</span></div><button onclick="activeTab='fooldal'; render()" class="px-3 h-7 rounded-full bg-white/20 text-[11px]">← Vissza</button></div>
-   <div class="flex flex-1"><aside class="left-nav w-[230px] hidden md:flex flex-col p-3 gap-1">${leftNav}</aside>
-   <main class="flex-1 p-4"><div class="max-w-[1280px] mx-auto"><div class="flex flex-wrap justify-between gap-2 items-center mb-4"><h2 class="font-bold text-[16px]">👑 Rivaldafény • 100 fő • 50👨 50👩 • 1 óra/fő • 🗳️ szavazás • ⚔️ aktuális párbaj • ⏳ visszaszámláló • ❌ kieső • ➡️ továbbjutó • 🔄 következő ellenfél • 🏆 nap férfija • 🏆 nap nője</h2><button id="joinSpotlight" class="px-5 h-10 rounded-full bg-gradient-to-r from-[#a855f7] to-[#ff2e93] text-white font-bold text-[12px]">Csatlakozás</button></div>
-   <div class="grid md:grid-cols-2 gap-3 mb-4">${spotlightTopMale?`<div class="bg-white rounded-[12px] p-3 flex gap-3 border"><span>🏆</span><img src="${spotlightTopMale.profilePic}" class="w-12 h-12 rounded-full" /><div><div class="font-bold text-[13px]">A nap férfija: ${spotlightTopMale.name}</div><div class="text-[11px] opacity-60">${spotlightTopMale.likes||0} szavazat</div></div></div>`:''}${spotlightTopFemale?`<div class="bg-white rounded-[12px] p-3 flex gap-3 border"><span>🏆</span><img src="${spotlightTopFemale.profilePic}" class="w-12 h-12 rounded-full" /><div><div class="font-bold text-[13px]">A nap nője: ${spotlightTopFemale.name}</div><div class="text-[11px] opacity-60">${spotlightTopFemale.likes||0} szavazat</div></div></div>`:''}</div>
-   <div class="grid grid-cols-2 md:grid-cols-5 gap-3">${spotlightData.map(s=>{ let u=users.find(x=>x.id===s.userId); if(!u) return ''; let rem=Math.max(0, Math.round((s.expiresAt-Date.now())/60000)); return `<div class="bg-white rounded-[14px] border overflow-hidden"><div class="relative h-[150px]"><img src="${u.profilePic}" class="w-full h-full object-cover" /><div class="absolute top-1 left-1 px-2 py-0.5 rounded-full bg-black/60 text-white text-[9px]">⏳ ${rem}p</div><div class="absolute top-1 right-1 px-2 py-0.5 rounded-full bg-[#ff2e93] text-white text-[9px]">${s.likes||0} 🗳️</div></div><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-vote="${s.userId}" class="mt-1 w-full h-7 rounded-full bg-black text-white text-[10px]">Szavaz</button></div></div>`; }).join('') || '<div class="opacity-50">Még nincs résztvevő • Csatlakozz</div>'}</div>
-   ${spotlightDuels.length?`<div class="mt-6"><h3 class="font-bold text-[13px]">⚔️ Aktuális párbajok</h3><div class="mt-2 grid md:grid-cols-3 gap-3">${spotlightDuels.map(d=>{ let a=users.find(x=>x.id===d.a?.userId)||{name:'?'}; let b=users.find(x=>x.id===d.b?.userId)||{name:'?'}; return `<div class="bg-white rounded-[12px] p-3 border text-[11px]"><div class="flex justify-between"><span>${a.name}</span><span>${b.name}</span></div><div class="flex gap-2 mt-2"><button data-vote="${d.a?.userId}" class="flex-1 h-7 rounded-full bg-black text-white">${d.votesA||0} szavazat</button><button data-vote="${d.b?.userId}" class="flex-1 h-7 rounded-full bg-white border">${d.votesB||0} szavazat</button></div></div>`; }).join('')}</div></div>`:''}
-   ${spotlightWaiting.length?`<div class="mt-6"><div class="font-bold text-[13px]">🔄 Várakozó üzemmód • ${spotlightWaiting.length}</div><div class="flex gap-2 mt-2">${spotlightWaiting.map(s=>{ let u=users.find(x=>x.id===s.userId); if(!u) return ''; return `<div class="text-center"><img src="${u.profilePic}" class="w-10 h-10 rounded-full opacity-60" /><div class="text-[9px]">${u.name.split(',')[0]}</div></div>`; }).join('')}</div></div>`:''}
-   </div></main></div></div>`;
- }
-
- let centerContent = '';
- if(activeTab==='fooldal'){
-  centerContent = cur?`
-          <div class="grid md:grid-cols-[360px_1fr] gap-0">
-            <div class="relative">
-              <div class="absolute top-2 left-2 z-10 flex gap-1"><span class="px-2 py-1 rounded-full bg-black/60 text-white text-[10px]">${cur.age} - ${cur.location}</span></div>
-              <div class="absolute top-2 right-2 z-10 flex gap-1"><span class="px-2 py-1 rounded-full bg-[#ff2e93] text-white text-[10px]">👟 Futás</span><span class="px-2 py-1 rounded-full bg-black/60 text-white text-[10px]">📷 Fotózás</span></div>
-              <img src="${cur.profilePic}" class="w-full h-[480px] object-cover" />
-              <div class="absolute bottom-2 left-2 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#20e0a0]"></span> Online</div>
-              <div class="p-3 text-center"><div class="font-bold text-[16px]">${cur.name}</div><div class="text-[11px] opacity-60">📍 Nő - ${cur.location}</div></div>
-            </div>
-            <div class="p-4">
-              <div class="flex flex-wrap gap-2 mb-3">${(cur.hobbies||['Futás','Főzés','Utazás']).map(h=>`<span class="tag-pill">✈️ ${h}</span>`).join('')}</div>
-              <div class="text-[13px] leading-[1.5] word-wrap bg-[#fbf9ff] rounded-[12px] p-3 border border-[#ece8ff]">${cur.bio}</div>
-              <!-- GOMBOK AZ ADATLAP FÖLÉ - JAVÍTVA -->
-              <div class="mt-4 grid grid-cols-2 gap-2">
-                <button data-fav="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">💜 Kedvencek</button>
-                <button data-super="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⭐ Szuperlike</button>
-                <button data-like="${cur.id}" class="h-10 rounded-full btn-pink text-[12px] font-bold">🔥 Tetszik</button>
-                <button data-chat="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">✉️ Üzenet</button>
-                <button data-gift="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">🎁 Ajándék</button>
-                <button class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⚡ Boost</button>
-              </div>
-              <div class="mt-3 flex gap-2"><button id="btnNope" class="flex-1 h-11 rounded-full bg-white border border-black/10 text-[13px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-11 rounded-full btn-pink text-[13px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-11 rounded-full btn-yellow text-[13px]">Szuper</button></div>
-              <!-- ADATLAP EZUTÁN JÖN - ALUL -->
-              <div class="mt-4 grid grid-cols-2 gap-2"><div class="info-box"><div class="info-label">Magasság</div><div class="info-val">${cur.height} cm</div></div><div class="info-box"><div class="info-label">Test</div><div class="info-val">${cur.bodyType}</div></div><div class="info-box"><div class="info-label">Szem</div><div class="info-val">${cur.eye||'Kék'}</div></div><div class="info-box"><div class="info-label">Haj</div><div class="info-val">${cur.hair||'Szőke'}</div></div><div class="info-box"><div class="info-label">Végzettség</div><div class="info-val">${cur.education}</div></div><div class="info-box"><div class="info-label">Munka</div><div class="info-val">${cur.job||'Marketing'}</div></div><div class="info-box col-span-2 flex gap-2"><span class="text-[10px]">🚭 Nem dohányzom</span><span class="text-[10px]">🍷 Alkalmi</span><span class="text-[10px]">🎧 Pog</span></div></div>
-              <div class="mt-3 flex gap-2 justify-center text-[11px] opacity-60"><button id="micTest" class="px-2">📞 Mikrofon teszt</button><button id="camTest" class="px-2">🎥 Kamera teszt</button></div>
-            </div>
-          </div>
-  `:`<div class="p-12 text-center"><div class="text-[48px]">💜</div><div class="font-bold mt-3">Nincs több profil</div><button onclick="swipeIndex=0; render()" class="mt-4 px-6 h-10 rounded-full bg-black text-white font-bold">Újrakezdés</button></div>`;
- } else if(activeTab==='parositasok'){
-  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">💞 Párosítások • Kedveléseim</h3><div class="mt-4 grid md:grid-cols-2 gap-4"><div><div class="font-bold text-[13px] mb-2">Te kedvelted (${likes.length})</div><div class="grid grid-cols-2 gap-2">${likes.map(id=>{ let u=users.find(x=>x.id===id); if(!u) return ''; return `<div class="bg-white rounded-[12px] border overflow-hidden"><img src="${u.profilePic}" class="w-full h-[140px] object-cover" /><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-chat="${u.id}" class="mt-1 w-full h-7 rounded-full bg-black text-white text-[10px]">Üzenet</button></div></div>`; }).join('') || '<div class="opacity-50 text-[11px]">Még nincs</div>'}</div></div><div><div class="font-bold text-[13px] mb-2">Téged kedveltek (${likedBy.length})</div><div class="grid grid-cols-2 gap-2">${likedBy.map(id=>{ let u=users.find(x=>x.id===id); if(!u) return ''; return `<div class="bg-white rounded-[12px] border overflow-hidden"><img src="${u.profilePic}" class="w-full h-[140px] object-cover" /><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-like="${u.id}" class="mt-1 w-full h-7 rounded-full bg-gradient-to-r from-[#a855f7] to-[#ff2e93] text-white text-[10px]">Vissza • Új randi!!</button></div></div>`; }).join('') || '<div class="opacity-50 text-[11px]">Még nincs</div>'}</div></div></div></div>`;
- } else if(activeTab==='ujsag'){
-  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">📰 Újság</h3><div id="newsList" class="mt-4 grid md:grid-cols-3 gap-3">Betöltés...</div></div>`;
- } else if(activeTab==='messages'){
-  centerContent = `<div class="p-0"><div class="grid md:grid-cols-[300px_1fr] h-[600px]"><div class="border-r bg-white"><div class="p-3 border-b font-bold text-[13px]">💬 Üzenetek</div><div class="overflow-auto">${filteredUsers.map(u=>{ let key=[currentUser.id, u.id].sort().join('__'); let last=(messages[key]||[]).slice(-1)[0]; return `<div data-chat="${u.id}" class="p-3 flex gap-2 cursor-pointer hover:bg-[#f8f7ff] border-b ${activeChat===u.id?'bg-[#f0eeff]':''}"><img src="${u.profilePic}" class="w-9 h-9 rounded-full object-cover" /><div class="flex-1 min-w-0"><div class="font-bold text-[11px]">${u.name}</div><div class="text-[10px] opacity-60 truncate">${last?last.text.slice(0,30):'Kezdj beszélgetést'}</div></div></div>`; }).join('')}</div></div><div class="flex flex-col bg-[#fbf9ff]"><div id="msgList" class="flex-1 overflow-auto p-4 space-y-2">${(messages[[currentUser.id, activeChat].sort().join('__')]||[]).map(m=>`<div class="flex ${m.senderId===currentUser.id?'justify-end':'justify-start'}"><div class="msg-bubble px-3 py-2 rounded-[14px] text-[12px] ${m.senderId===currentUser.id?'bg-[#a855f7] text-white':'bg-white border'}">${m.text}</div></div>`).join('') || '<div class="opacity-50 text-center mt-20 text-[12px]">Válassz beszélgetést</div>'}</div><div class="p-3 border-t flex gap-2"><input id="msgInput" placeholder="Írj üzenetet..." class="flex-1 h-9 rounded-full bg-white border border-black/10 px-3 text-[12px]" /><button id="sendBtn" class="w-9 h-9 rounded-full bg-[#a855f7] text-white">➤</button></div></div></div></div>`;
- } else if(activeTab==='profilom'){
-  centerContent = `<div class="p-6 grid md:grid-cols-[300px_1fr] gap-4"><div><img src="${currentUser.profilePic}" class="w-full h-[360px] object-cover rounded-[16px] border" /><div class="mt-3 grid grid-cols-4 gap-2">${(currentUser.images||[]).map((img,i)=>`<div class="relative"><img src="${img}" class="w-full h-[60px] rounded-[10px] object-cover" /><button data-delimg="${i}" class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black text-white text-[8px]">✕</button>${i===0?'<span class="absolute bottom-1 left-1 text-[7px] px-1 rounded bg-[#a855f7] text-white">FŐ</span>':''}</div>`).join('')}</div><label class="mt-3 flex h-9 rounded-full bg-black text-white text-[11px] font-bold items-center justify-center cursor-pointer">+ Kép • 📷 galéria • 📸 kamera<input type="file" id="addImages" accept="image/*" multiple class="hidden" /></label></div><div><h3 class="font-bold">Profil szerkesztése</h3><div class="mt-3 grid gap-2"><input id="p_name" value="${currentUser.name}" class="h-9 rounded-[10px] bg-white border border-black/10 px-3 text-[12px]" placeholder="Név" /><input id="p_loc" value="${currentUser.location}" class="h-9 rounded-[10px] bg-white border border-black/10 px-3 text-[12px]" placeholder="Város" /><textarea id="p_bio" class="rounded-[10px] bg-white border border-black/10 p-3 text-[12px]" rows="3">${currentUser.bio}</textarea><div class="grid grid-cols-2 gap-2"><select id="p_rel" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${REL.map(o=>`<option ${currentUser.relationshipStatus===o?'selected':''}>${o}</option>`).join('')}</select><select id="p_child" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${CHILD.map(o=>`<option ${currentUser.childrenStatus===o?'selected':''}>${o}</option>`).join('')}</select><input id="p_height" type="number" value="${currentUser.height}" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]" /><select id="p_body" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${BODY.map(o=>`<option ${currentUser.bodyType===o?'selected':''}>${o}</option>`).join('')}</select><select id="p_edu" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${EDU.map(o=>`<option ${currentUser.education===o?'selected':''}>${o}</option>`).join('')}</select><input id="p_phone" value="${currentUser.phone||''}" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]" placeholder="Telefon privát" /></div><button id="saveProfile" class="h-10 rounded-full bg-black text-white font-bold text-[12px]">Mentés</button><button id="logout" class="h-9 rounded-full bg-[#f0eeff] text-[#6d28d9] font-bold text-[11px]">Kilépés</button></div></div></div>`;
- } else if(activeTab==='kedvenceim'){
-  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">❤️ Kedvenceim • ${favorites.length}</h3><div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">${favorites.map(id=>{ let u=users.find(x=>x.id===id); if(!u) return ''; return `<div class="bg-white rounded-[12px] border overflow-hidden"><img src="${u.profilePic}" class="w-full h-[140px] object-cover" /><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-chat="${u.id}" class="mt-1 w-full h-7 rounded-full bg-black text-white text-[10px]">Üzenet</button></div></div>`; }).join('') || '<div class="opacity-50">Nincs kedvenced</div>'}</div></div>`;
- } else if(activeTab==='notifications'){
-  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">🔔 Értesítések</h3><div class="mt-4 space-y-2">${notifications.map(n=>`<div class="p-3 bg-white rounded-[12px] border flex justify-between text-[12px]"><span>${n.text}</span><span class="opacity-50 text-[10px]">${n.at}</span></div>`).join('') || '<div class="opacity-50">Nincs értesítés</div>'}</div></div>`;
+ let mainInner='';
+ if(activeTab==='fooldal' && cur){
+  mainInner=`
+  <div id="swipeCard" class="swipe-card">
+    <div class="relative">
+      <img src="${cur.profilePic}" class="mobile-profile-img w-full h-[520px] md:h-[640px] object-cover object-top" />
+      <div class="absolute top-3 left-3 px-3 py-1.5 rounded-full bg-black/60 text-white text-[11px]"> ${cur.age} - ${cur.location} </div>
+      <div class="absolute top-3 right-3 px-3 py-1.5 rounded-full bg-[#ff2e93] text-white text-[11px]">Online</div>
+      <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-4 text-white md:hidden">
+        <div class="font-bold text-[20px]">${cur.name}</div>
+        <div class="text-[12px] opacity-80">📍 ${cur.gender} - ${cur.location}</div>
+      </div>
+    </div>
+    <div class="p-3 md:p-5 bg-white">
+      <div class="hidden md:block text-center mb-3"><div class="font-bold text-[20px]">${cur.name}</div><div class="text-[12px] opacity-60">📍 ${cur.gender} - ${cur.location}</div></div>
+      <div class="flex flex-wrap gap-2 mb-3">${(cur.hobbies||['Utazás']).map(h=>`<span class="tag-pill">✈️ ${h}</span>`).join('')}</div>
+      <div class="text-[14px] bg-[#fbf9ff] rounded-[14px] p-3 border border-[#ece8ff] mb-4">${cur.bio}</div>
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <button data-fav="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">💜 Kedvencek</button>
+        <button data-super="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">⭐ Szuperlike</button>
+        <button data-like="${cur.id}" class="h-12 rounded-full btn-pink text-[14px] font-bold">🔥 Tetszik</button>
+        <button data-chat="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">✉️ Üzenet</button>
+        <button data-gift="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">🎁 Ajándék</button>
+        <button class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">⚡ Boost</button>
+      </div>
+      <div class="flex gap-2 mb-4"><button id="btnNope" class="flex-1 h-12 rounded-full bg-white border border-black/10 text-[14px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-12 rounded-full btn-pink text-[14px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-12 rounded-full btn-yellow text-[14px] font-bold">Szuper</button></div>
+      <div class="grid grid-cols-2 gap-2 mb-3"><div class="info-box"><div class="info-label">Magasság</div><div class="info-val">${cur.height||168} cm</div></div><div class="info-box"><div class="info-label">Test</div><div class="info-val">${cur.bodyType||'Átlagos'}</div></div><div class="info-box"><div class="info-label">Szem</div><div class="info-val">${cur.eye||'Kék'}</div></div><div class="info-box"><div class="info-label">Haj</div><div class="info-val">${cur.hair||'Szőke'}</div></div><div class="info-box"><div class="info-label">Végzettség</div><div class="info-val">${cur.education||'Egyetem'}</div></div><div class="info-box"><div class="info-label">Munka</div><div class="info-val">${cur.job||'Marketing'}</div></div></div>
+      <div class="flex justify-center gap-4 text-[11px] opacity-60"><button id="micTest">📞 Mikrofon teszt</button><button id="camTest">🎥 Kamera teszt</button></div>
+      <div class="md:hidden text-center mt-3 text-[10px] opacity-40">👉 Húzd jobbra = Igen, balra = Nem</div>
+    </div>
+  </div>`;
  } else {
-  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">${activeTab}</h3><p class="opacity-50 text-[12px] mt-4">Hamarosan</p></div>`;
+  let backBtn = `<button onclick="activeTab='fooldal'; render()" class="mb-3 flex items-center gap-2 px-5 h-11 rounded-full bg-black text-white text-[13px] font-bold"><span>←</span> Vissza a főoldalra</button>`;
+  if(activeTab==='rivaldafeny'){
+   mainInner = backBtn + `<h2 class="font-bold text-[16px] p-2">👑 Rivaldafény • ${spotlightData.length}/100 • 50👨 50👩 • 1óra • szavazás • párbaj • nap férfija/nője</h2><div class="grid grid-cols-2 md:grid-cols-4 gap-2 p-2">${spotlightData.map(s=>{ let u=users.find(x=>x.id===s.userId); if(!u) return ''; return `<div class="bg-white border rounded-[12px] overflow-hidden"><img src="${u.profilePic}" class="w-full h-[160px] object-cover" /><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-vote="${u.id}" class="w-full h-8 rounded-full bg-black text-white text-[11px] mt-1">Szavaz</button></div></div>`}).join('') || 'Nincs résztvevő'}</div>`;
+  } else if(activeTab==='profilom'){
+   mainInner = backBtn + `<div class="p-3 grid gap-3"><img src="${currentUser.profilePic}" class="w-full h-[500px] object-cover rounded-[16px] object-top" /><div class="grid grid-cols-4 gap-2">${(currentUser.images||[]).map((img,i)=>`<div class="relative"><img src="${img}" class="w-full h-[70px] rounded-[10px] object-cover" /><button data-delimg="${i}" class="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-black text-white text-[10px]">✕</button></div>`).join('')}</div><label class="h-11 rounded-full bg-black text-white flex items-center justify-center font-bold text-[12px]">+ Kép galéria / kamera<input type="file" id="addImages" accept="image/*" multiple class="hidden" /></label><input id="p_name" value="${currentUser.name}" class="h-11 rounded-[12px] border px-3" /><textarea id="p_bio" class="rounded-[12px] border p-3">${currentUser.bio}</textarea><button id="saveProfile" class="h-12 rounded-full bg-black text-white font-bold">Mentés</button><button id="logout" class="h-11 rounded-full bg-[#f0eeff] text-[#6d28d9] font-bold">Kilépés - vissza loginra</button></div>`;
+  } else {
+   mainInner = backBtn + `<div class="p-4"><h3 class="font-bold">${activeTab}</h3><p class="opacity-60 mt-2">Tartalom</p></div>`;
+  }
  }
 
  return `<div class="min-h-screen bg-[#f5f3ff] flex flex-col">
-  <div class="love-top h-[48px] flex items-center px-4 justify-between text-white">
-    <div class="flex items-center gap-2 font-black text-[18px]"><span>💜</span><span class="brand">Lovenux</span><span class="text-[10px] opacity-80 font-normal ml-2 hidden md:inline">| Ahol bejön az élet</span></div>
-    <div class="flex items-center gap-3 text-[11px]">
-      <button data-tab="notifications" class="flex items-center gap-1 px-3 h-7 rounded-full bg-white/20">🔔 ${notifications.length?`<span class="px-1.5 rounded-full bg-[#ff2e93] text-white">${notifications.length}</span>`:''} Értesítések</button>
-      <button data-tab="messages" class="flex items-center gap-1 px-3 h-7 rounded-full bg-white/20">💬 ${Object.keys(messages).length?`<span class="px-1.5 rounded-full bg-[#ff2e93] text-white">${Object.keys(messages).length}</span>`:''} Üzenetek</button>
-      <div class="w-7 h-7 rounded-full overflow-hidden border-2 border-white/40"><img src="${currentUser.profilePic}" class="w-full h-full object-cover" /></div>
-      <span class="hidden md:inline font-bold">${currentUser.name.split(',')[0]}</span>
-    </div>
+  <div class="love-top h-[56px] flex items-center px-3 justify-between text-white sticky top-[28px] z-[70]">
+    <div class="flex items-center gap-2"><button id="mobMenu" class="md:hidden w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">☰</button><span class="font-black text-[20px]">💜</span><span class="brand font-bold">Lovenux</span></div>
+    <div class="flex items-center gap-2"><button data-tab="messages" class="px-3 h-9 rounded-full bg-white/20 text-[11px]">💬 Üzenetek</button><div class="w-8 h-8 rounded-full overflow-hidden border-2 border-white/40"><img src="${currentUser.profilePic}" class="w-full h-full object-cover" /></div></div>
   </div>
   <div class="flex flex-1">
-    <aside class="left-nav w-[230px] hidden md:flex flex-col p-3 gap-1 sticky top-0 h-[calc(100vh-36px)] overflow-auto">
+    <aside id="leftNavMain" class="left-nav hidden md:flex w-[250px] flex-col p-3 gap-1 fixed md:static inset-y-0 left-0 z-[80] pt-[80px] md:pt-3 h-screen md:h-auto overflow-auto">
+      <button id="closeMenu" class="md:hidden self-end w-9 h-9 rounded-full bg-white/10 text-white mb-2">✕</button>
       ${leftNav}
     </aside>
-    <main id="mainContent" class="flex-1 bg-[#f5f3ff] p-4">
-      <div class="max-w-[1100px] mx-auto">
-        <div class="bg-white rounded-[18px] border border-black/5 shadow-sm overflow-hidden">
-          ${centerContent}
-        </div>
+    <div id="mobileOverlay" class="hidden fixed inset-0 bg-black/50 z-[70] md:hidden"></div>
+    <main id="mainContent" class="flex-1 w-full bg-[#f5f3ff] md:p-4">
+      <div class="max-w-[900px] mx-auto bg-white md:rounded-[18px] overflow-hidden shadow-sm">
+        ${mainInner}
       </div>
     </main>
   </div>
 </div>`;
 }
 function bindMain(){
- document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click', ()=>{ let t=b.dataset.tab; activeTab=t; render(); }));
+ document.getElementById('mobMenu')?.addEventListener('click', ()=>{ document.getElementById('leftNavMain').classList.remove('hidden'); document.getElementById('leftNavMain').classList.add('flex'); document.getElementById('mobileOverlay').classList.remove('hidden'); });
+ document.getElementById('closeMenu')?.addEventListener('click', ()=>{ document.getElementById('leftNavMain').classList.add('hidden'); document.getElementById('mobileOverlay').classList.add('hidden'); });
+ document.getElementById('mobileOverlay')?.addEventListener('click', ()=>{ document.getElementById('leftNavMain').classList.add('hidden'); document.getElementById('mobileOverlay').classList.add('hidden'); });
+ document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click', ()=>{ activeTab=b.dataset.tab; document.getElementById('leftNavMain')?.classList.add('hidden'); document.getElementById('mobileOverlay')?.classList.add('hidden'); render(); }));
  document.querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click', e=>{ e.stopPropagation(); doLike(b.dataset.like,'like'); }));
  document.querySelectorAll('[data-super]').forEach(b=>b.addEventListener('click', e=>{ e.stopPropagation(); doLike(b.dataset.super,'superlike'); }));
- document.querySelectorAll('[data-fav]').forEach(b=>{ b.addEventListener('click', ()=>{ let id=b.dataset.fav; if(!favorites.includes(id)){ favorites.push(id); localStorage.setItem('lovenux_v2_fav', JSON.stringify(favorites)); } render(); }); });
+ document.querySelectorAll('[data-fav]').forEach(b=>b.addEventListener('click', ()=>{ let id=b.dataset.fav; if(!favorites.includes(id)){ favorites.push(id); localStorage.setItem('lovenux_v2_fav', JSON.stringify(favorites)); } render(); }));
  document.querySelectorAll('[data-chat]').forEach(el=>el.addEventListener('click', ()=>{ activeChat=el.dataset.chat; activeTab='messages'; render(); }));
- document.querySelectorAll('[data-gift]').forEach(b=>b.addEventListener('click', ()=>openGiftModal(b.dataset.gift)));
- document.querySelectorAll('[data-vote]').forEach(b=>b.addEventListener('click', async ()=>{ const to=b.dataset.vote; try{ const res=await fetch('/api/spotlight/vote',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({voterId:currentUser.id, targetId:to})}); const data=await res.json(); if(data.success){ if(socket) socket.emit('spotlightVote',{from:currentUser.id,to}); loadSpotlight(); } else alert(data.message||'Már szavaztál'); }catch{} }));
- document.getElementById('joinSpotlight')?.addEventListener('click', async ()=>{ try{ const res=await fetch('/api/spotlight/join',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:currentUser.id})}); const data=await res.json(); if(data.success){ if(socket) socket.emit('spotlightJoin',{userId:currentUser.id}); loadSpotlight(); } else alert(data.message||'Tele van • várakozóba kerültél'); }catch{} });
  document.getElementById('btnLike')?.addEventListener('click', ()=>doLike(filteredUsers[swipeIndex]?.id,'like'));
  document.getElementById('btnNope')?.addEventListener('click', ()=>{ swipeIndex++; render(); });
  document.getElementById('btnSuper')?.addEventListener('click', ()=>doLike(filteredUsers[swipeIndex]?.id,'superlike'));
- const sendBtn=document.getElementById('sendBtn'); const msgInput=document.getElementById('msgInput');
- if(sendBtn && msgInput){
-  let sending=false;
-  const send=()=>{
-   if(sending) return;
-   let text=msgInput.value.trim(); if(!text) return;
-   let to=activeChat||filteredUsers[0]?.id; if(!to) { sending=false; return; }
-   sending=true;
-   if(socket && socket.connected){ socket.emit('sendMessage',{from:currentUser.id,to,text}); }
-   else {
-    let key=[currentUser.id, to].sort().join('__');
-    if(!messages[key]) messages[key]=[];
-    if(!messages[key].some(m=>m.text===text && Date.now()-m.timestamp<2000)){
-     let msg={id:'local_'+Date.now(), senderId:currentUser.id, text, timestamp:Date.now()};
-     messages[key].push(msg); localStorage.setItem('lovenux_v2_msgs', JSON.stringify(messages));
-    }
-   }
-   msgInput.value=''; render();
-   setTimeout(()=>{ sending=false; },300);
-  };
-  sendBtn.addEventListener('click', send);
-  msgInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); send(); } });
+ const card=document.getElementById('swipeCard');
+ if(card){
+   let startX=0;
+   card.addEventListener('touchstart', e=>{ startX=e.touches[0].clientX; }, {passive:true});
+   card.addEventListener('touchend', e=>{
+     let dx=e.changedTouches[0].clientX-startX;
+     if(dx>80){ doLike(filteredUsers[swipeIndex]?.id,'like'); }
+     else if(dx<-80){ swipeIndex++; render(); }
+   });
  }
- document.getElementById('micTest')?.addEventListener('click', async ()=>{ try{ let s=await navigator.mediaDevices.getUserMedia({audio:true}); alert('Mikrofon működik'); s.getTracks().forEach(t=>t.stop()); }catch{ alert('Mikrofon nem elérhető'); } });
- document.getElementById('camTest')?.addEventListener('click', async ()=>{ try{ let s=await navigator.mediaDevices.getUserMedia({video:true}); alert('Kamera működik'); s.getTracks().forEach(t=>t.stop()); }catch{ alert('Kamera nem elérhető'); } });
  document.getElementById('saveProfile')?.addEventListener('click', ()=>{
   currentUser.name=document.getElementById('p_name')?.value||currentUser.name;
-  currentUser.location=document.getElementById('p_loc')?.value||currentUser.location;
   currentUser.bio=document.getElementById('p_bio')?.value||currentUser.bio;
-  currentUser.relationshipStatus=document.getElementById('p_rel')?.value||currentUser.relationshipStatus;
-  currentUser.childrenStatus=document.getElementById('p_child')?.value||currentUser.childrenStatus;
-  currentUser.height=parseInt(document.getElementById('p_height')?.value)||currentUser.height;
-  currentUser.bodyType=document.getElementById('p_body')?.value||currentUser.bodyType;
-  currentUser.education=document.getElementById('p_edu')?.value||currentUser.education;
-  currentUser.phone=document.getElementById('p_phone')?.value||currentUser.phone;
   localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render();
  });
  document.getElementById('logout')?.addEventListener('click', ()=>{
   savePersistentProfile();
   localStorage.removeItem('lovenux_isLoggedIn');
-  currentUser=null;
-  isLoggedIn=false;
-  activeTab='fooldal';
-  // teljes reload hogy biztosan landing jojjon
-  location.reload();
+  currentUser=null; isLoggedIn=false; location.reload();
  });
- document.getElementById('addImages')?.addEventListener('change', async e=>{ for(let f of Array.from(e.target.files)){ let b64=await fileToBase64(f); currentUser.images.push(b64); } currentUser.images=currentUser.images.slice(0,8); if(currentUser.images[0]) currentUser.profilePic=currentUser.images[0]; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render(); });
+ document.getElementById('addImages')?.addEventListener('change', async e=>{
+  for(let f of Array.from(e.target.files)){ let b64=await fileToBase64(f); currentUser.images.push(b64); }
+  currentUser.images=currentUser.images.slice(0,8);
+  if(currentUser.images[0]) currentUser.profilePic=currentUser.images[0];
+  localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render();
+ });
  document.querySelectorAll('[data-delimg]').forEach(btn=>btn.addEventListener('click', ()=>{ let i=parseInt(btn.dataset.delimg); currentUser.images.splice(i,1); if(currentUser.images.length===0) currentUser.profilePic=''; else currentUser.profilePic=currentUser.images[0]; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render(); }));
- fetch('/api/news').then(r=>r.json()).then(news=>{
-  let el=document.getElementById('newsList');
-  if(el) el.innerHTML=news.map(n=>`<div class="flex gap-2 p-2 rounded-[10px] bg-[#f8f7ff] border border-[#ece8ff]"><img src="${n.image}" class="w-12 h-10 rounded-[8px] object-cover" /><div><div class="font-bold text-[10px] leading-tight">${n.title}</div><div class="text-[9px] opacity-60 mt-1">${n.desc.slice(0,40)}</div></div></div>`).join('') || '<div class="opacity-50 text-[10px]">Nincs hír</div>';
- });
+ document.getElementById('micTest')?.addEventListener('click', async ()=>{ try{ let s=await navigator.mediaDevices.getUserMedia({audio:true}); alert('Mikrofon működik'); s.getTracks().forEach(t=>t.stop()); }catch{ alert('Mikrofon nem elérhető'); } });
+ document.getElementById('camTest')?.addEventListener('click', async ()=>{ try{ let s=await navigator.mediaDevices.getUserMedia({video:true}); alert('Kamera működik'); s.getTracks().forEach(t=>t.stop()); }catch{ alert('Kamera nem elérhető'); } });
 }
 function doLike(id,type){
  if(!id) return;
@@ -369,12 +305,6 @@ function doLike(id,type){
  if(socket) socket.emit('like',{from:currentUser.id,to:id,type});
  if(Math.random()>0.35){ addNotif('💕 Új randi!!','match'); }
  swipeIndex++; render();
-}
-function openGiftModal(to){
- let gift=prompt('Ajándék: 🌹 Rózsa, 🍫 Csoki, 💎 Gyémánt, 🧸 Maci, 💋 Puszi, 🥂 Pezsgő');
- if(!gift) return;
- let found=GIFTS.find(g=>gift.includes(g.icon)||gift.toLowerCase().includes(g.name.toLowerCase())) || {icon:'🎁',name:gift};
- if(socket) socket.emit('gift',{from:currentUser.id,to,gift:found});
 }
 function checkBarion(){
  if(!currentUser) return;
@@ -384,10 +314,6 @@ function checkBarion(){
    let div=document.createElement('div'); div.id='barionOverlay'; div.className='barionOverlay';
    div.innerHTML=`<div class="rounded-[24px] bg-white p-8 max-w-[360px] text-center"><div class="text-[32px]">💳</div><div class="brand text-[20px] font-bold mt-3">1000 Ft / örökre VIP</div><div class="text-[12px] opacity-70 mt-2">Belül minden ingyenes</div><button id="payBarion" class="mt-5 w-full h-12 rounded-[14px] font-bold text-white bg-gradient-to-r from-[#a855f7] to-[#ff2e93]">Fizetés Barionnal</button></div>`;
    document.body.appendChild(div);
-   document.getElementById('payBarion')?.addEventListener('click', async ()=>{
-    try{ let res=await fetch('/api/barion/pay',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:currentUser.id})}); let data=await res.json(); if(data.success){ currentUser.isPaid=true; document.getElementById('barionOverlay')?.remove(); document.getElementById('mainContent')?.classList.remove('barionBlur'); } }catch{}
-   });
-   document.getElementById('mainContent')?.classList.add('barionBlur');
   }
  }).catch(()=>{});
 }
