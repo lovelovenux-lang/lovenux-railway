@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
-<title>Lovenux</title>
+<title>Lovenux - Ahol bejön az élet</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="/socket.io/socket.io.js"></script>
@@ -21,6 +21,7 @@
 .info-val{font-size:12px; font-weight:700; color:#2a1a5a}
 .btn-pink{background:linear-gradient(90deg,#ec4899,#ff5a8a); color:white}
 .btn-yellow{background:linear-gradient(90deg,#facc15,#fbbf24); color:#422006; font-weight:800}
+.hide-scrollbar::-webkit-scrollbar{display:none}
 </style>
 </head>
 <body class="bg-[#f5f3ff] text-[#111] antialiased">
@@ -31,18 +32,25 @@ const REL=['Egyedülálló','Kapcsolatban','Bonyolult','Házas de nem működik'
 const CHILD=['Nincs gyerek','Van gyerek - nálam','Van gyerek - nem nálam','Szeretnék gyereket','Nem szeretnék gyereket','Majd később'];
 const BODY=['Vékony','Átlagos','Sportos','Izmos','Telt','Molett'];
 const EDU=['Általános iskola','Szakmunkás','Érettségi','Főiskola / Egyetem','Mester / Doktori'];
-const HOBBIES=['Futás','Főzés','Utazás','Gasztro','Zene','Mozi','Edzés','Túrázás','Olvasás','Gaming','Fotózás','Könyv','Természet','Állatok','Művészet','Bor','Kávé','Jóga','Bulizás','Sport'];
+const HOBBIES=['Futás','Főzés','Utazás','Gasztro','Zene','Mozi','Edzés','Túrázás','Olvasás','Gaming','Fotózás','Könyv','Természet','Állatok','Művészet','Bor','Kávé','Jóga','Bulizás','Sport','Séta','Kert','Auto','Motor'];
 const GIFTS=[{icon:'🌹',name:'Rózsa'},{icon:'🍫',name:'Csoki'},{icon:'💎',name:'Gyémánt'},{icon:'🧸',name:'Maci'},{icon:'💋',name:'Puszi'},{icon:'🥂',name:'Pezsgő'}];
-let currentUser=JSON.parse(localStorage.getItem('lovenux_v2_user')||'null');
+
+// JAVÍTÁS: currentUser induláskor NULL, nem auto-login -> első oldal mindig belépés/regisztráció
+// képek megmaradása külön tárolóban
+let currentUser=null;
 let savedProfiles=JSON.parse(localStorage.getItem('lovenux_saved_profiles')||'{}');
-if(currentUser && savedProfiles[currentUser.id]){
- let sp=savedProfiles[currentUser.id];
- if(sp.profilePic) currentUser.profilePic=sp.profilePic;
- if(sp.images && sp.images.length>0) currentUser.images=sp.images;
+let isLoggedIn = localStorage.getItem('lovenux_isLoggedIn')==='true';
+if(isLoggedIn){
+  try{ currentUser=JSON.parse(localStorage.getItem('lovenux_v2_user')||'null'); }catch{ currentUser=null; }
+  if(currentUser && savedProfiles[currentUser.id]){
+    let sp=savedProfiles[currentUser.id];
+    if(sp.profilePic) currentUser.profilePic=sp.profilePic;
+    if(sp.images && sp.images.length>0) currentUser.images=sp.images;
+  }
 }
 function savePersistentProfile(){
  if(!currentUser) return;
- const data={id:currentUser.id, profilePic:currentUser.profilePic, images:currentUser.images, name:currentUser.name};
+ const data={id:currentUser.id, profilePic:currentUser.profilePic, images:currentUser.images||[], name:currentUser.name};
  localStorage.setItem('lovenux_persistent_profile', JSON.stringify(data));
  let all=JSON.parse(localStorage.getItem('lovenux_saved_profiles')||'{}');
  all[currentUser.id]=data; localStorage.setItem('lovenux_saved_profiles', JSON.stringify(all));
@@ -50,6 +58,7 @@ function savePersistentProfile(){
 }
 window.addEventListener('beforeunload', savePersistentProfile);
 window.addEventListener('pagehide', savePersistentProfile);
+
 let users=[], filteredUsers=[], swipeIndex=0, activeTab='fooldal', activeChat=null;
 let messages=JSON.parse(localStorage.getItem('lovenux_v2_msgs')||'{}');
 let likes=JSON.parse(localStorage.getItem('lovenux_v2_likes')||'[]');
@@ -59,6 +68,7 @@ let blocks=JSON.parse(localStorage.getItem('lovenux_v2_blocks')||'[]');
 let notifications=JSON.parse(localStorage.getItem('lovenux_notif')||'[]');
 let spotlightData=[], spotlightWaiting=[], spotlightTopMale=null, spotlightTopFemale=null, spotlightDuels=[];
 let socket=null;
+
 function initSocket(){
  if(!currentUser) return;
  try{ socket=io(); }catch{ return; }
@@ -108,8 +118,13 @@ async function register(fd){
  try{
   const res=await fetch('/api/register',{method:'POST', body:fd});
   const data=await res.json();
-  if(data.user){ currentUser=data.user; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); location.reload(); }
-  else alert(data.message||'Hiba');
+  if(data.user){
+    currentUser=data.user;
+    localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser));
+    localStorage.setItem('lovenux_isLoggedIn','true');
+    savePersistentProfile();
+    location.reload();
+  } else alert(data.message||'Hiba');
  }catch(e){ alert('Hiba: '+e.message); }
 }
 async function loadSpotlight(){
@@ -151,8 +166,13 @@ function bindLanding(){
   try{
    const res=await fetch('/api/login',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password:pass})});
    const data=await res.json();
-   if(data.user){ currentUser=data.user; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); location.reload(); }
-   else alert(data.message||'Hiba');
+   if(data.user){
+     currentUser=data.user;
+     localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser));
+     localStorage.setItem('lovenux_isLoggedIn','true');
+     savePersistentProfile();
+     location.reload();
+   } else alert(data.message||'Hiba');
   }catch{ alert('Nincs ilyen felhasználó'); }
  });
  document.getElementById('r_submit')?.addEventListener('click', ()=>{
@@ -199,11 +219,11 @@ function renderMain(){
  if(activeTab==='rivaldafeny'){
   return `<div class="min-h-screen bg-[#f5f3ff] flex flex-col">
    <div class="love-top h-[48px] flex items-center px-4 justify-between text-white"><div class="flex items-center gap-2 font-black text-[18px]"><span>💜</span><span class="brand">Lovenux</span></div><button onclick="activeTab='fooldal'; render()" class="px-3 h-7 rounded-full bg-white/20 text-[11px]">← Vissza</button></div>
-   <div class="flex flex-1"><aside class="left-nav w-[220px] hidden md:flex flex-col p-3 gap-1">${leftNav}</aside>
+   <div class="flex flex-1"><aside class="left-nav w-[230px] hidden md:flex flex-col p-3 gap-1">${leftNav}</aside>
    <main class="flex-1 p-4"><div class="max-w-[1280px] mx-auto"><div class="flex flex-wrap justify-between gap-2 items-center mb-4"><h2 class="font-bold text-[16px]">👑 Rivaldafény • 100 fő • 50👨 50👩 • 1 óra/fő • 🗳️ szavazás • ⚔️ aktuális párbaj • ⏳ visszaszámláló • ❌ kieső • ➡️ továbbjutó • 🔄 következő ellenfél • 🏆 nap férfija • 🏆 nap nője</h2><button id="joinSpotlight" class="px-5 h-10 rounded-full bg-gradient-to-r from-[#a855f7] to-[#ff2e93] text-white font-bold text-[12px]">Csatlakozás</button></div>
    <div class="grid md:grid-cols-2 gap-3 mb-4">${spotlightTopMale?`<div class="bg-white rounded-[12px] p-3 flex gap-3 border"><span>🏆</span><img src="${spotlightTopMale.profilePic}" class="w-12 h-12 rounded-full" /><div><div class="font-bold text-[13px]">A nap férfija: ${spotlightTopMale.name}</div><div class="text-[11px] opacity-60">${spotlightTopMale.likes||0} szavazat</div></div></div>`:''}${spotlightTopFemale?`<div class="bg-white rounded-[12px] p-3 flex gap-3 border"><span>🏆</span><img src="${spotlightTopFemale.profilePic}" class="w-12 h-12 rounded-full" /><div><div class="font-bold text-[13px]">A nap nője: ${spotlightTopFemale.name}</div><div class="text-[11px] opacity-60">${spotlightTopFemale.likes||0} szavazat</div></div></div>`:''}</div>
    <div class="grid grid-cols-2 md:grid-cols-5 gap-3">${spotlightData.map(s=>{ let u=users.find(x=>x.id===s.userId); if(!u) return ''; let rem=Math.max(0, Math.round((s.expiresAt-Date.now())/60000)); return `<div class="bg-white rounded-[14px] border overflow-hidden"><div class="relative h-[150px]"><img src="${u.profilePic}" class="w-full h-full object-cover" /><div class="absolute top-1 left-1 px-2 py-0.5 rounded-full bg-black/60 text-white text-[9px]">⏳ ${rem}p</div><div class="absolute top-1 right-1 px-2 py-0.5 rounded-full bg-[#ff2e93] text-white text-[9px]">${s.likes||0} 🗳️</div></div><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-vote="${s.userId}" class="mt-1 w-full h-7 rounded-full bg-black text-white text-[10px]">Szavaz</button></div></div>`; }).join('') || '<div class="opacity-50">Még nincs résztvevő • Csatlakozz</div>'}</div>
-   ${spotlightDuels.length?`<div class="mt-6"><h3 class="font-bold text-[13px]">⚔️ Aktuális párbajok • ⏳ visszaszámláló • ❌ kieső • ➡️ továbbjutó</h3><div class="mt-2 grid md:grid-cols-3 gap-3">${spotlightDuels.map(d=>{ let a=users.find(x=>x.id===d.a?.userId)||{name:'?'}; let b=users.find(x=>x.id===d.b?.userId)||{name:'?'}; return `<div class="bg-white rounded-[12px] p-3 border text-[11px]"><div class="flex justify-between"><span>${a.name}</span><span>${b.name}</span></div><div class="flex gap-2 mt-2"><button data-vote="${d.a?.userId}" class="flex-1 h-7 rounded-full bg-black text-white">${d.votesA||0} szavazat</button><button data-vote="${d.b?.userId}" class="flex-1 h-7 rounded-full bg-white border">${d.votesB||0} szavazat</button></div></div>`; }).join('')}</div></div>`:''}
+   ${spotlightDuels.length?`<div class="mt-6"><h3 class="font-bold text-[13px]">⚔️ Aktuális párbajok</h3><div class="mt-2 grid md:grid-cols-3 gap-3">${spotlightDuels.map(d=>{ let a=users.find(x=>x.id===d.a?.userId)||{name:'?'}; let b=users.find(x=>x.id===d.b?.userId)||{name:'?'}; return `<div class="bg-white rounded-[12px] p-3 border text-[11px]"><div class="flex justify-between"><span>${a.name}</span><span>${b.name}</span></div><div class="flex gap-2 mt-2"><button data-vote="${d.a?.userId}" class="flex-1 h-7 rounded-full bg-black text-white">${d.votesA||0} szavazat</button><button data-vote="${d.b?.userId}" class="flex-1 h-7 rounded-full bg-white border">${d.votesB||0} szavazat</button></div></div>`; }).join('')}</div></div>`:''}
    ${spotlightWaiting.length?`<div class="mt-6"><div class="font-bold text-[13px]">🔄 Várakozó üzemmód • ${spotlightWaiting.length}</div><div class="flex gap-2 mt-2">${spotlightWaiting.map(s=>{ let u=users.find(x=>x.id===s.userId); if(!u) return ''; return `<div class="text-center"><img src="${u.profilePic}" class="w-10 h-10 rounded-full opacity-60" /><div class="text-[9px]">${u.name.split(',')[0]}</div></div>`; }).join('')}</div></div>`:''}
    </div></main></div></div>`;
  }
@@ -211,7 +231,7 @@ function renderMain(){
  let centerContent = '';
  if(activeTab==='fooldal'){
   centerContent = cur?`
-          <div class="grid md:grid-cols-[340px_1fr] gap-0">
+          <div class="grid md:grid-cols-[360px_1fr] gap-0">
             <div class="relative">
               <div class="absolute top-2 left-2 z-10 flex gap-1"><span class="px-2 py-1 rounded-full bg-black/60 text-white text-[10px]">${cur.age} - ${cur.location}</span></div>
               <div class="absolute top-2 right-2 z-10 flex gap-1"><span class="px-2 py-1 rounded-full bg-[#ff2e93] text-white text-[10px]">👟 Futás</span><span class="px-2 py-1 rounded-full bg-black/60 text-white text-[10px]">📷 Fotózás</span></div>
@@ -223,7 +243,14 @@ function renderMain(){
               <div class="flex flex-wrap gap-2 mb-3">${(cur.hobbies||['Futás','Főzés','Utazás']).map(h=>`<span class="tag-pill">✈️ ${h}</span>`).join('')}</div>
               <div class="text-[13px] leading-[1.5] word-wrap bg-[#fbf9ff] rounded-[12px] p-3 border border-[#ece8ff]">${cur.bio}</div>
               <div class="mt-4 grid grid-cols-2 gap-2"><div class="info-box"><div class="info-label">Magasság</div><div class="info-val">${cur.height} cm</div></div><div class="info-box"><div class="info-label">Test</div><div class="info-val">${cur.bodyType}</div></div><div class="info-box"><div class="info-label">Szem</div><div class="info-val">${cur.eye||'Kék'}</div></div><div class="info-box"><div class="info-label">Haj</div><div class="info-val">${cur.hair||'Szőke'}</div></div><div class="info-box"><div class="info-label">Végzettség</div><div class="info-val">${cur.education}</div></div><div class="info-box"><div class="info-label">Munka</div><div class="info-val">${cur.job||'Marketing'}</div></div><div class="info-box col-span-2 flex gap-2"><span class="text-[10px]">🚭 Nem dohányzom</span><span class="text-[10px]">🍷 Alkalmi</span><span class="text-[10px]">🎧 Pog</span></div></div>
-              <div class="mt-4 grid grid-cols-2 gap-2"><button data-fav="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">💜 Kedvencek</button><button data-super="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⭐ Szuper Like</button><button data-like="${cur.id}" class="h-8 rounded-full btn-pink text-[11px] font-bold">🔥 Tetszik</button><button data-chat="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">✉️ Üzenet</button><button data-gift="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">🎁 Ajándék</button><button class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⚡ Boost</button></div>
+              <div class="mt-4 grid grid-cols-2 gap-2">
+                <button data-fav="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">💜 Kedvencek</button>
+                <button data-super="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⭐ Szuperlike</button>
+                <button data-like="${cur.id}" class="h-8 rounded-full btn-pink text-[11px] font-bold">🔥 Tetszik</button>
+                <button data-chat="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">✉️ Üzenet</button>
+                <button data-gift="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">🎁 Ajándék</button>
+                <button class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⚡ Boost</button>
+              </div>
               <div class="mt-4 flex gap-2"><button id="btnNope" class="flex-1 h-10 rounded-full bg-white border border-black/10 text-[13px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-10 rounded-full btn-pink text-[13px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-10 rounded-full btn-yellow text-[13px]">Szuper</button></div>
               <div class="mt-3 flex gap-2 justify-center text-[11px] opacity-60"><button id="micTest" class="px-2">📞 Mikrofon teszt</button><button id="camTest" class="px-2">🎥 Kamera teszt</button></div>
             </div>
@@ -236,11 +263,13 @@ function renderMain(){
  } else if(activeTab==='messages'){
   centerContent = `<div class="p-0"><div class="grid md:grid-cols-[300px_1fr] h-[600px]"><div class="border-r bg-white"><div class="p-3 border-b font-bold text-[13px]">💬 Üzenetek</div><div class="overflow-auto">${filteredUsers.map(u=>{ let key=[currentUser.id, u.id].sort().join('__'); let last=(messages[key]||[]).slice(-1)[0]; return `<div data-chat="${u.id}" class="p-3 flex gap-2 cursor-pointer hover:bg-[#f8f7ff] border-b ${activeChat===u.id?'bg-[#f0eeff]':''}"><img src="${u.profilePic}" class="w-9 h-9 rounded-full object-cover" /><div class="flex-1 min-w-0"><div class="font-bold text-[11px]">${u.name}</div><div class="text-[10px] opacity-60 truncate">${last?last.text.slice(0,30):'Kezdj beszélgetést'}</div></div></div>`; }).join('')}</div></div><div class="flex flex-col bg-[#fbf9ff]"><div id="msgList" class="flex-1 overflow-auto p-4 space-y-2">${(messages[[currentUser.id, activeChat].sort().join('__')]||[]).map(m=>`<div class="flex ${m.senderId===currentUser.id?'justify-end':'justify-start'}"><div class="msg-bubble px-3 py-2 rounded-[14px] text-[12px] ${m.senderId===currentUser.id?'bg-[#a855f7] text-white':'bg-white border'}">${m.text}</div></div>`).join('') || '<div class="opacity-50 text-center mt-20 text-[12px]">Válassz beszélgetést</div>'}</div><div class="p-3 border-t flex gap-2"><input id="msgInput" placeholder="Írj üzenetet..." class="flex-1 h-9 rounded-full bg-white border border-black/10 px-3 text-[12px]" /><button id="sendBtn" class="w-9 h-9 rounded-full bg-[#a855f7] text-white">➤</button></div></div></div></div>`;
  } else if(activeTab==='profilom'){
-  centerContent = `<div class="p-6 grid md:grid-cols-[300px_1fr] gap-4"><div><img src="${currentUser.profilePic}" class="w-full h-[360px] object-cover rounded-[16px] border" /><div class="mt-3 grid grid-cols-4 gap-2">${currentUser.images.map((img,i)=>`<div class="relative"><img src="${img}" class="w-full h-[60px] rounded-[10px] object-cover" /><button data-delimg="${i}" class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black text-white text-[8px]">✕</button>${i===0?'<span class="absolute bottom-1 left-1 text-[7px] px-1 rounded bg-[#a855f7] text-white">FŐ</span>':''}</div>`).join('')}</div><label class="mt-3 flex h-9 rounded-full bg-black text-white text-[11px] font-bold items-center justify-center cursor-pointer">+ Kép • 📷 galéria • 📸 kamera<input type="file" id="addImages" accept="image/*" multiple class="hidden" /></label></div><div><h3 class="font-bold">Profil szerkesztése</h3><div class="mt-3 grid gap-2"><input id="p_name" value="${currentUser.name}" class="h-9 rounded-[10px] bg-white border border-black/10 px-3 text-[12px]" placeholder="Név" /><input id="p_loc" value="${currentUser.location}" class="h-9 rounded-[10px] bg-white border border-black/10 px-3 text-[12px]" placeholder="Város" /><textarea id="p_bio" class="rounded-[10px] bg-white border border-black/10 p-3 text-[12px]" rows="3">${currentUser.bio}</textarea><div class="grid grid-cols-2 gap-2"><select id="p_rel" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${REL.map(o=>`<option ${currentUser.relationshipStatus===o?'selected':''}>${o}</option>`).join('')}</select><select id="p_child" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${CHILD.map(o=>`<option ${currentUser.childrenStatus===o?'selected':''}>${o}</option>`).join('')}</select><input id="p_height" type="number" value="${currentUser.height}" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]" /><select id="p_body" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${BODY.map(o=>`<option ${currentUser.bodyType===o?'selected':''}>${o}</option>`).join('')}</select><select id="p_edu" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${EDU.map(o=>`<option ${currentUser.education===o?'selected':''}>${o}</option>`).join('')}</select><input id="p_phone" value="${currentUser.phone||''}" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]" placeholder="Telefon privát" /></div><button id="saveProfile" class="h-10 rounded-full bg-black text-white font-bold text-[12px]">Mentés</button><button id="logout" class="h-9 rounded-full bg-[#f0eeff] text-[#6d28d9] font-bold text-[11px]">Kilépés</button></div></div></div>`;
+  centerContent = `<div class="p-6 grid md:grid-cols-[300px_1fr] gap-4"><div><img src="${currentUser.profilePic}" class="w-full h-[360px] object-cover rounded-[16px] border" /><div class="mt-3 grid grid-cols-4 gap-2">${(currentUser.images||[]).map((img,i)=>`<div class="relative"><img src="${img}" class="w-full h-[60px] rounded-[10px] object-cover" /><button data-delimg="${i}" class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black text-white text-[8px]">✕</button>${i===0?'<span class="absolute bottom-1 left-1 text-[7px] px-1 rounded bg-[#a855f7] text-white">FŐ</span>':''}</div>`).join('')}</div><label class="mt-3 flex h-9 rounded-full bg-black text-white text-[11px] font-bold items-center justify-center cursor-pointer">+ Kép • 📷 galéria • 📸 kamera<input type="file" id="addImages" accept="image/*" multiple class="hidden" /></label></div><div><h3 class="font-bold">Profil szerkesztése</h3><div class="mt-3 grid gap-2"><input id="p_name" value="${currentUser.name}" class="h-9 rounded-[10px] bg-white border border-black/10 px-3 text-[12px]" placeholder="Név" /><input id="p_loc" value="${currentUser.location}" class="h-9 rounded-[10px] bg-white border border-black/10 px-3 text-[12px]" placeholder="Város" /><textarea id="p_bio" class="rounded-[10px] bg-white border border-black/10 p-3 text-[12px]" rows="3">${currentUser.bio}</textarea><div class="grid grid-cols-2 gap-2"><select id="p_rel" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${REL.map(o=>`<option ${currentUser.relationshipStatus===o?'selected':''}>${o}</option>`).join('')}</select><select id="p_child" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${CHILD.map(o=>`<option ${currentUser.childrenStatus===o?'selected':''}>${o}</option>`).join('')}</select><input id="p_height" type="number" value="${currentUser.height}" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]" /><select id="p_body" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${BODY.map(o=>`<option ${currentUser.bodyType===o?'selected':''}>${o}</option>`).join('')}</select><select id="p_edu" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]">${EDU.map(o=>`<option ${currentUser.education===o?'selected':''}>${o}</option>`).join('')}</select><input id="p_phone" value="${currentUser.phone||''}" class="h-9 rounded-[10px] bg-white border border-black/10 px-2 text-[11px]" placeholder="Telefon privát" /></div><button id="saveProfile" class="h-10 rounded-full bg-black text-white font-bold text-[12px]">Mentés</button><button id="logout" class="h-9 rounded-full bg-[#f0eeff] text-[#6d28d9] font-bold text-[11px]">Kilépés</button></div></div></div>`;
  } else if(activeTab==='kedvenceim'){
   centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">❤️ Kedvenceim • ${favorites.length}</h3><div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">${favorites.map(id=>{ let u=users.find(x=>x.id===id); if(!u) return ''; return `<div class="bg-white rounded-[12px] border overflow-hidden"><img src="${u.profilePic}" class="w-full h-[140px] object-cover" /><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-chat="${u.id}" class="mt-1 w-full h-7 rounded-full bg-black text-white text-[10px]">Üzenet</button></div></div>`; }).join('') || '<div class="opacity-50">Nincs kedvenced</div>'}</div></div>`;
+ } else if(activeTab==='notifications'){
+  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">🔔 Értesítések</h3><div class="mt-4 space-y-2">${notifications.map(n=>`<div class="p-3 bg-white rounded-[12px] border flex justify-between text-[12px]"><span>${n.text}</span><span class="opacity-50 text-[10px]">${n.at}</span></div>`).join('') || '<div class="opacity-50">Nincs értesítés</div>'}</div></div>`;
  } else {
-  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">${activeTab}</h3><p class="opacity-50 text-[12px] mt-4">Tartalom hamarosan</p></div>`;
+  centerContent = `<div class="p-6"><h3 class="font-bold text-[16px]">${activeTab}</h3><p class="opacity-50 text-[12px] mt-4">Hamarosan</p></div>`;
  }
 
  return `<div class="min-h-screen bg-[#f5f3ff] flex flex-col">
@@ -250,6 +279,7 @@ function renderMain(){
       <button data-tab="notifications" class="flex items-center gap-1 px-3 h-7 rounded-full bg-white/20">🔔 ${notifications.length?`<span class="px-1.5 rounded-full bg-[#ff2e93] text-white">${notifications.length}</span>`:''} Értesítések</button>
       <button data-tab="messages" class="flex items-center gap-1 px-3 h-7 rounded-full bg-white/20">💬 ${Object.keys(messages).length?`<span class="px-1.5 rounded-full bg-[#ff2e93] text-white">${Object.keys(messages).length}</span>`:''} Üzenetek</button>
       <div class="w-7 h-7 rounded-full overflow-hidden border-2 border-white/40"><img src="${currentUser.profilePic}" class="w-full h-full object-cover" /></div>
+      <span class="hidden md:inline font-bold">${currentUser.name.split(',')[0]}</span>
     </div>
   </div>
   <div class="flex flex-1">
@@ -315,7 +345,12 @@ function bindMain(){
   currentUser.phone=document.getElementById('p_phone')?.value||currentUser.phone;
   localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render();
  });
- document.getElementById('logout')?.addEventListener('click', ()=>{ savePersistentProfile(); localStorage.removeItem('lovenux_v2_user'); location.reload(); });
+ document.getElementById('logout')?.addEventListener('click', ()=>{
+  savePersistentProfile();
+  localStorage.removeItem('lovenux_isLoggedIn');
+  // user marad a storage-ban, de kijelentkezik -> első oldalra dob
+  render();
+ });
  document.getElementById('addImages')?.addEventListener('change', async e=>{ for(let f of Array.from(e.target.files)){ let b64=await fileToBase64(f); currentUser.images.push(b64); } currentUser.images=currentUser.images.slice(0,8); if(currentUser.images[0]) currentUser.profilePic=currentUser.images[0]; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render(); });
  document.querySelectorAll('[data-delimg]').forEach(btn=>btn.addEventListener('click', ()=>{ let i=parseInt(btn.dataset.delimg); currentUser.images.splice(i,1); if(currentUser.images.length===0) currentUser.profilePic=''; else currentUser.profilePic=currentUser.images[0]; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render(); }));
  fetch('/api/news').then(r=>r.json()).then(news=>{
