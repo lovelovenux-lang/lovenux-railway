@@ -242,16 +242,18 @@ function renderMain(){
             <div class="p-4">
               <div class="flex flex-wrap gap-2 mb-3">${(cur.hobbies||['Futás','Főzés','Utazás']).map(h=>`<span class="tag-pill">✈️ ${h}</span>`).join('')}</div>
               <div class="text-[13px] leading-[1.5] word-wrap bg-[#fbf9ff] rounded-[12px] p-3 border border-[#ece8ff]">${cur.bio}</div>
-              <div class="mt-4 grid grid-cols-2 gap-2"><div class="info-box"><div class="info-label">Magasság</div><div class="info-val">${cur.height} cm</div></div><div class="info-box"><div class="info-label">Test</div><div class="info-val">${cur.bodyType}</div></div><div class="info-box"><div class="info-label">Szem</div><div class="info-val">${cur.eye||'Kék'}</div></div><div class="info-box"><div class="info-label">Haj</div><div class="info-val">${cur.hair||'Szőke'}</div></div><div class="info-box"><div class="info-label">Végzettség</div><div class="info-val">${cur.education}</div></div><div class="info-box"><div class="info-label">Munka</div><div class="info-val">${cur.job||'Marketing'}</div></div><div class="info-box col-span-2 flex gap-2"><span class="text-[10px]">🚭 Nem dohányzom</span><span class="text-[10px]">🍷 Alkalmi</span><span class="text-[10px]">🎧 Pog</span></div></div>
+              <!-- GOMBOK AZ ADATLAP FÖLÉ - JAVÍTVA -->
               <div class="mt-4 grid grid-cols-2 gap-2">
-                <button data-fav="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">💜 Kedvencek</button>
-                <button data-super="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⭐ Szuperlike</button>
-                <button data-like="${cur.id}" class="h-8 rounded-full btn-pink text-[11px] font-bold">🔥 Tetszik</button>
-                <button data-chat="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">✉️ Üzenet</button>
-                <button data-gift="${cur.id}" class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">🎁 Ajándék</button>
-                <button class="h-8 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⚡ Boost</button>
+                <button data-fav="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">💜 Kedvencek</button>
+                <button data-super="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⭐ Szuperlike</button>
+                <button data-like="${cur.id}" class="h-10 rounded-full btn-pink text-[12px] font-bold">🔥 Tetszik</button>
+                <button data-chat="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">✉️ Üzenet</button>
+                <button data-gift="${cur.id}" class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">🎁 Ajándék</button>
+                <button class="h-9 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[11px] font-bold">⚡ Boost</button>
               </div>
-              <div class="mt-4 flex gap-2"><button id="btnNope" class="flex-1 h-10 rounded-full bg-white border border-black/10 text-[13px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-10 rounded-full btn-pink text-[13px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-10 rounded-full btn-yellow text-[13px]">Szuper</button></div>
+              <div class="mt-3 flex gap-2"><button id="btnNope" class="flex-1 h-11 rounded-full bg-white border border-black/10 text-[13px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-11 rounded-full btn-pink text-[13px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-11 rounded-full btn-yellow text-[13px]">Szuper</button></div>
+              <!-- ADATLAP EZUTÁN JÖN - ALUL -->
+              <div class="mt-4 grid grid-cols-2 gap-2"><div class="info-box"><div class="info-label">Magasság</div><div class="info-val">${cur.height} cm</div></div><div class="info-box"><div class="info-label">Test</div><div class="info-val">${cur.bodyType}</div></div><div class="info-box"><div class="info-label">Szem</div><div class="info-val">${cur.eye||'Kék'}</div></div><div class="info-box"><div class="info-label">Haj</div><div class="info-val">${cur.hair||'Szőke'}</div></div><div class="info-box"><div class="info-label">Végzettség</div><div class="info-val">${cur.education}</div></div><div class="info-box"><div class="info-label">Munka</div><div class="info-val">${cur.job||'Marketing'}</div></div><div class="info-box col-span-2 flex gap-2"><span class="text-[10px]">🚭 Nem dohányzom</span><span class="text-[10px]">🍷 Alkalmi</span><span class="text-[10px]">🎧 Pog</span></div></div>
               <div class="mt-3 flex gap-2 justify-center text-[11px] opacity-60"><button id="micTest" class="px-2">📞 Mikrofon teszt</button><button id="camTest" class="px-2">🎥 Kamera teszt</button></div>
             </div>
           </div>
@@ -348,8 +350,11 @@ function bindMain(){
  document.getElementById('logout')?.addEventListener('click', ()=>{
   savePersistentProfile();
   localStorage.removeItem('lovenux_isLoggedIn');
-  // user marad a storage-ban, de kijelentkezik -> első oldalra dob
-  render();
+  currentUser=null;
+  isLoggedIn=false;
+  activeTab='fooldal';
+  // teljes reload hogy biztosan landing jojjon
+  location.reload();
  });
  document.getElementById('addImages')?.addEventListener('change', async e=>{ for(let f of Array.from(e.target.files)){ let b64=await fileToBase64(f); currentUser.images.push(b64); } currentUser.images=currentUser.images.slice(0,8); if(currentUser.images[0]) currentUser.profilePic=currentUser.images[0]; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render(); });
  document.querySelectorAll('[data-delimg]').forEach(btn=>btn.addEventListener('click', ()=>{ let i=parseInt(btn.dataset.delimg); currentUser.images.splice(i,1); if(currentUser.images.length===0) currentUser.profilePic=''; else currentUser.profilePic=currentUser.images[0]; localStorage.setItem('lovenux_v2_user', JSON.stringify(currentUser)); savePersistentProfile(); render(); }));
