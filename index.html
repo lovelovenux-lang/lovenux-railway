@@ -211,8 +211,7 @@ function renderMain(){
     </div>
     <div class="p-3 md:p-5 bg-white">
       <div class="hidden md:block text-center mb-3"><div class="font-bold text-[20px]">${cur.name}</div><div class="text-[12px] opacity-60">📍 ${cur.gender} - ${cur.location}</div></div>
-      <div class="flex flex-wrap gap-2 mb-3">${(cur.hobbies||['Utazás']).map(h=>`<span class="tag-pill">✈️ ${h}</span>`).join('')}</div>
-      <div class="text-[14px] bg-[#fbf9ff] rounded-[14px] p-3 border border-[#ece8ff] mb-4">${cur.bio}</div>
+      <!-- LÉNYEG FELÜLRE - gombok -->
       <div class="grid grid-cols-2 gap-2 mb-3">
         <button data-fav="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">💜 Kedvencek</button>
         <button data-super="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">⭐ Szuperlike</button>
@@ -221,14 +220,17 @@ function renderMain(){
         <button data-gift="${cur.id}" class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">🎁 Ajándék</button>
         <button class="h-11 rounded-full bg-[#ede9ff] text-[#6d28d9] text-[12px] font-bold">⚡ Boost</button>
       </div>
-      <div class="flex gap-2 mb-4"><button id="btnNope" class="flex-1 h-12 rounded-full bg-white border border-black/10 text-[14px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-12 rounded-full btn-pink text-[14px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-12 rounded-full btn-yellow text-[14px] font-bold">Szuper</button></div>
+      <div class="flex gap-2 mb-5"><button id="btnNope" class="flex-1 h-12 rounded-full bg-white border border-black/10 text-[14px] font-bold">✕ Nem</button><button id="btnLike" class="flex-1 h-12 rounded-full btn-pink text-[14px] font-bold">Igen 💜</button><button id="btnSuper" class="flex-1 h-12 rounded-full btn-yellow text-[14px] font-bold">Szuper</button></div>
+      <!-- BEMUTATKOZÁS ÉS HOBBI LEJJEBB RAKVA - ahogy kérted -->
+      <div class="flex flex-wrap gap-2 mb-3">${(cur.hobbies||['Utazás']).map(h=>`<span class="tag-pill">✈️ ${h}</span>`).join('')}</div>
+      <div class="text-[14px] bg-[#fbf9ff] rounded-[14px] p-3 border border-[#ece8ff] mb-4">${cur.bio}</div>
       <div class="grid grid-cols-2 gap-2 mb-3"><div class="info-box"><div class="info-label">Magasság</div><div class="info-val">${cur.height||168} cm</div></div><div class="info-box"><div class="info-label">Test</div><div class="info-val">${cur.bodyType||'Átlagos'}</div></div><div class="info-box"><div class="info-label">Szem</div><div class="info-val">${cur.eye||'Kék'}</div></div><div class="info-box"><div class="info-label">Haj</div><div class="info-val">${cur.hair||'Szőke'}</div></div><div class="info-box"><div class="info-label">Végzettség</div><div class="info-val">${cur.education||'Egyetem'}</div></div><div class="info-box"><div class="info-label">Munka</div><div class="info-val">${cur.job||'Marketing'}</div></div></div>
       <div class="flex justify-center gap-4 text-[11px] opacity-60"><button id="micTest">📞 Mikrofon teszt</button><button id="camTest">🎥 Kamera teszt</button></div>
       <div class="md:hidden text-center mt-3 text-[10px] opacity-40">👉 Húzd jobbra = Igen, balra = Nem</div>
     </div>
   </div>`;
  } else {
-  let backBtn = `<button onclick="activeTab='fooldal'; render()" class="mb-3 flex items-center gap-2 px-5 h-11 rounded-full bg-black text-white text-[13px] font-bold"><span>←</span> Vissza a főoldalra</button>`;
+  let backBtn = ``; // vissza gomb kivéve kérésre
   if(activeTab==='rivaldafeny'){
    mainInner = backBtn + `<h2 class="font-bold text-[16px] p-2">👑 Rivaldafény • ${spotlightData.length}/100 • 50👨 50👩 • 1óra • szavazás • párbaj • nap férfija/nője</h2><div class="grid grid-cols-2 md:grid-cols-4 gap-2 p-2">${spotlightData.map(s=>{ let u=users.find(x=>x.id===s.userId); if(!u) return ''; return `<div class="bg-white border rounded-[12px] overflow-hidden"><img src="${u.profilePic}" class="w-full h-[160px] object-cover" /><div class="p-2"><div class="font-bold text-[11px]">${u.name}</div><button data-vote="${u.id}" class="w-full h-8 rounded-full bg-black text-white text-[11px] mt-1">Szavaz</button></div></div>`}).join('') || 'Nincs résztvevő'}</div>`;
   } else if(activeTab==='profilom'){
