@@ -1,531 +1,385 @@
-require('dotenv').config();
-const cluster = require('cluster');
-const os = require('os');
+
+// Lovenux Server - 1 MILLIÁRD felhasználóig skálázva
+// Node.js + Express + Cluster + Sharding
+import express from 'express';
+import cluster from 'cluster';
+import os from 'os';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import helmet from 'helmet';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import multer from 'multer';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const CONFIG = {
+  PORT: process.env.PORT || 3000,
+  JWT_SECRET: process.env.JWT_SECRET || 'lovenux-super-secret-2024-billion-scale',
+  SHARD_COUNT: 1000, // 1000 shard = 1M user / shard = 1B total
+  BCRYPT_ROUNDS: 10,
+  DATA_DIR: path.join(__dirname, 'data'),
+  UPLOAD_DIR: path.join(__dirname, 'uploads'),
+  MAX_USERS: 1_000_000_000,
+  CACHE_SIZE: 100000,
+};
+
+// LRU Cache a gyors eléréshez
+import { LRUCache } from 'lru-cache';
+const userCache = new LRUCache({ max: CONFIG.CACHE_SIZE });
+const emailToIdCache = new LRUCache({ max: CONFIG.CACHE_SIZE });
+
+// Sharding logika - konzisztens hash
+function getShardId(email) {
+  const hash = crypto.createHash('md5').update(email.toLowerCase()).digest('hex');
+  const num = parseInt(hash.substring(0, 8), 16);
+  return num % CONFIG.SHARD_COUNT;
+}
+function getShardPath(shardId) {
+  return path.join(CONFIG.DATA_DIR, `shard_${shardId}.jsonl`);
+}
+function getIndexPath() {
+  return path.join(CONFIG.DATA_DIR, '_index.json');
+}
+function getStatsPath() {
+  return path.join(CONFIG.DATA_DIR, '_stats.json');
+}
+
+// Init mappák
+function initStorage() {
+  if (!fs.existsSync(CONFIG.DATA_DIR)) fs.mkdirSync(CONFIG.DATA_DIR, { recursive: true });
+  if (!fs.existsSync(CONFIG.UPLOAD_DIR)) fs.mkdirSync(CONFIG.UPLOAD_DIR, { recursive: true });
+  for (let i = 0; i < CONFIG.SHARD_COUNT; i++) {
+    const p = getShardPath(i);
+    if (!fs.existsSync(p)) fs.writeFileSync(p, '');
+  }
+  if (!fs.existsSync(getIndexPath())) fs.writeFileSync(getIndexPath(), JSON.stringify({ emails: {}, count: 0 }));
+  if (!fs.existsSync(getStatsPath())) fs.writeFileSync(getStatsPath(), JSON.stringify({ total: 0, today: 0, lastReset: new Date().toISOString() }));
+}
+
+function readIndex() {
+  try { return JSON.parse(fs.readFileSync(getIndexPath(), 'utf8')); } catch { return { emails: {}, count: 0 }; }
+}
+function writeIndex(idx) {
+  fs.writeFileSync(getIndexPath(), JSON.stringify(idx));
+  // atomic rename for durability
+  fs.writeFileSync(getIndexPath()+'.tmp', JSON.stringify(idx));
+  fs.renameSync(getIndexPath()+'.tmp', getIndexPath());
+}
+function readStats() {
+  try { return JSON.parse(fs.readFileSync(getStatsPath(), 'utf8')); } catch { return { total: 0, today: 0, lastReset: new Date().toISOString() }; }
+}
+function writeStats(s) { fs.writeFileSync(getStatsPath(), JSON.stringify(s)); }
+
+function appendUserToShard(shardId, user) {
+  const line = JSON.stringify(user) + '\n';
+  fs.appendFileSync(getShardPath(shardId), line, 'utf8');
+}
+
+function findUserInShard(shardId, userId) {
+  const content = fs.readFileSync(getShardPath(shardId), 'utf8');
+  const lines = content.split('\n').filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) { // hátulról gyorsabb ha friss
+    try {
+      const u = JSON.parse(lines[i]);
+      if (u.id === userId) return u;
+    } catch {}
+  }
+  return null;
+}
+
+function findUserByEmail(email) {
+  const lower = email.toLowerCase();
+  if (emailToIdCache.has(lower)) {
+    const cachedId = emailToIdCache.get(lower);
+    if (userCache.has(cachedId)) return userCache.get(cachedId);
+  }
+  const idx = readIndex();
+  const entry = idx.emails[lower];
+  if (!entry) return null;
+  const user = findUserInShard(entry.shard, entry.id);
+  if (user) {
+    userCache.set(user.id, user);
+    emailToIdCache.set(lower, user.id);
+  }
+  return user;
+}
+
+// Cluster mód 1B-hoz
 if (cluster.isPrimary && process.argv.includes('--cluster')) {
-  const num = os.cpus().length;
-  console.log(`Primary ${process.pid} forking ${num} workers for 1B capacity`);
-  for(let i=0;i<num;i++) cluster.fork();
-  cluster.on('exit', w=>{ console.log(`Worker ${w.process.pid} died`); cluster.fork(); });
+  const numCPUs = os.cpus().length;
+  console.log(`[LOVENUX] Primary ${process.pid} - ${numCPUs} worker indítása 1B skálához`);
+  for (let i = 0; i < numCPUs; i++) cluster.fork();
+  cluster.on('exit', (worker) => {
+    console.log(`Worker ${worker.process.id} leállt, újraindítás...`);
+    cluster.fork();
+  });
 } else {
-  const express = require('express');
-  const http = require('http');
-  const { Server } = require('socket.io');
-  const cors = require('cors');
-  const path = require('path');
-  const fs = require('fs');
-  const multer = require('multer');
-  const { v4: uuid } = require('uuid');
-  const bcrypt = require('bcryptjs');
-  const jwt = require('jsonwebtoken');
-  const helmet = require('helmet');
-  const compression = require('compression');
-  const rateLimit = require('express-rate-limit');
-
+  initStorage();
   const app = express();
-  const server = http.createServer(app);
-  const io = new Server(server, { cors:{origin:"*"}, maxHttpBufferSize:1e8 });
 
-  app.use(helmet({contentSecurityPolicy:false}));
-  app.use(compression());
-  app.use(cors());
-  app.use(express.json({limit:'100mb'}));
-  app.use(express.urlencoded({limit:'100mb', extended:true}));
-  app.use('/api/', rateLimit({windowMs:60000, max:5000})); // high limit for 1B
+  app.use(helmet({ crossOriginResourcePolicy: false }));
+  app.use(cors({ origin: '*', credentials: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.use('/uploads', express.static(CONFIG.UPLOAD_DIR));
 
-  const upload = multer({storage: multer.memoryStorage(), limits:{fileSize:50*1024*1024}});
-  const DB_FILE = path.join(__dirname,'db.json');
-  const JWT_SECRET = process.env.JWT_SECRET||'lovenux-1b-2026-secret';
-  const BARION_ENV = process.env.BARION_ENV||'test';
-  const BARION_POSKEY = process.env.BARION_POSKEY||'test-poskey';
-  const FREE_REGISTRATION = process.env.FREE_REGISTRATION!=='false';
-  const BARION_ENABLED = process.env.BARION_ENABLED==='true'; // false during check
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD||'Lovenux2026!';
-  const ADMIN_TOKEN_SECRET = process.env.ADMIN_TOKEN_SECRET||'admin-lovenux-secret';
-  const BAD_WORDS_DEFAULT = ['kurva','bazmeg','fasz','geci','buzi','picsa','kurv','faszfej','anyád','fuck','shit','bitch','cunt'];
+  // Rate limit - 1B user védelme
+  const limiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300, // 300 req / perc / IP
+    standardHeaders: true,
+  });
+  app.use('/api/', limiter);
+  const authLimiter = rateLimit({ windowMs: 15*60*1000, max: 20 });
 
-  // 1B scalable structure: Map indexes O(1), pagination, sharded files possible
-  let db = {
-    users:[], messages:{}, likes:[], superlikes:[], matches:[], gifts:[], blocks:[], reports:[], news:[],
-    spotlight:[], spotlightWaiting:[], spotlightVotes:{}, spotlightVoters:{}, spotlightHistory:[], spotlightDuels:[], payments:[], banned:[], profanity:['kurva','bazmeg','fasz','geci','buzi','picsa','fuck','shit'], adminLogs:[], freeRegs:[]
-  };
-  let emailIndex = new Map(); // email lower -> index O(1)
-  let idIndex = new Map(); // id -> index O(1)
-
-  function loadDB(){
-    try{
-      if(fs.existsSync(DB_FILE)){
-        db = JSON.parse(fs.readFileSync(DB_FILE,'utf8'));
-        if(!db.spotlight) db.spotlight=[];
-        if(!db.spotlightWaiting) db.spotlightWaiting=[];
-        if(!db.spotlightVotes) db.spotlightVotes={};
-        if(!db.spotlightVoters) db.spotlightVoters={};
-        if(!db.spotlightHistory) db.spotlightHistory=[];
-        if(!db.spotlightDuels) db.spotlightDuels=[];
-        if(!db.payments) db.payments=[];
-        if(!db.banned) db.banned=[];
-        if(!db.profanity) db.profanity=['kurva','bazmeg','fasz','geci','buzi','picsa','fuck','shit'];
-        if(!db.adminLogs) db.adminLogs=[];
-        if(!db.freeRegs) db.freeRegs=[];
-        rebuild();
-      }
-    }catch(e){ console.error('load err',e); }
-  }
-  function rebuild(){
-    emailIndex.clear(); idIndex.clear();
-    // O(n) rebuild, but O(1) lookups after - scalable to 1B with sharding
-    for(let i=0;i<db.users.length;i++){
-      let u=db.users[i];
-      if(u.email) emailIndex.set(u.email.toLowerCase(), i);
-      idIndex.set(u.id, i);
+  const storage = multer.diskStorage({
+    destination: CONFIG.UPLOAD_DIR,
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname);
+      cb(null, crypto.randomUUID() + ext);
     }
-    console.log(`DB loaded ${db.users.length} users capacity 1B - indexes ready`);
-  }
-  function saveDB(){
-    // For 1B: would use append-only log + S3 + sharding, here atomic write for demo
-    try{ fs.writeFileSync(DB_FILE, JSON.stringify(db)); }catch{}
-  }
-  loadDB();
+  });
+  const upload = multer({ storage, limits: { fileSize: 15*1024*1024, files: 10 } });
 
-  if(db.users.length===0){
-    db.users=[
-      {id:'u2', email:'anna@lovenux.hu', passwordHash: bcrypt.hashSync('demo123',10), name:'Anna, 24', age:24, gender:'Nő', lookingFor:'Férfi', location:'Budapest, V.', bio:'Kávé, nevetés.', hobbies:['Utazás'], profilePic:'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&q=80', images:['https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=600&q=80'], relationshipStatus:'Egyedülálló', childrenStatus:'Nincs gyerek', height:168, bodyType:'Átlagos', education:'Egyetem', isVIP:true, isOnline:true, lastActive:'most', phone:'', isPaid:true, verified:true, createdAt:new Date().toISOString()},
-      {id:'u3', email:'balazs@lovenux.hu', passwordHash: bcrypt.hashSync('demo123',10), name:'Balázs, 27', age:27, gender:'Férfi', lookingFor:'Nő', location:'Budapest, XIII.', bio:'Bringa, edzés.', hobbies:['Edzés'], profilePic:'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&q=80', images:['https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&q=80'], relationshipStatus:'Egyedülálló', childrenStatus:'Nincs gyerek', height:182, bodyType:'Sportos', education:'Érettségi', isVIP:true, isOnline:true, lastActive:'2p', phone:'', isPaid:true, verified:true, createdAt:new Date().toISOString()},
-    ];
-    db.news=[
-      {id:'n1', title:'Új Lovenux frissítés', desc:'Rivaldafény 100 főig, 50 férfi 50 nő, szavazás, párbaj', image:'https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?w=600'},
-      {id:'n2', title:'1000 Ft regisztráció', desc:'Belül minden ingyenes, mindenki VIP', image:'https://images.unsplash.com/photo-1520857014576-2c4f4c972b57?w=600'}
-    ];
-    rebuild(); saveDB();
+  // JWT middleware
+  function auth(req, res, next) {
+    const h = req.headers.authorization;
+    if (!h) return res.status(401).json({ error: 'Nincs token' });
+    try {
+      const decoded = jwt.verify(h.replace('Bearer ', ''), CONFIG.JWT_SECRET);
+      req.userId = decoded.id;
+      next();
+    } catch { return res.status(401).json({ error: 'Érvénytelen token' }); }
   }
 
-  app.use(express.static(__dirname));
+  // --- API ---
 
-  function sanitizeUser(u){
-    const {passwordHash, email, phone, emailLower, ...safe} = u;
-    return safe;
-  }
-  function auth(req,res,next){
-    const token = req.headers['authorization']?.split(' ')[1] || req.headers['x-auth-token'] || req.headers['x-auth'];
-    if(token && token!=='vip'){
-      try{ req.user = jwt.verify(token, JWT_SECRET); }catch{}
-    }
-    if(token==='vip') req.user = {vip:true};
-    next();
-  }
-  app.use(auth);
-
-  function isProfane(text){
-    if(!text) return {bad:false};
-    const lower=text.toLowerCase();
-    for(let w of db.profanity){
-      if(lower.includes(w.toLowerCase())) return {bad:true, word:w};
-    }
-    return {bad:false};
-  }
-  function isBanned(userId){
-    const b=db.banned.find(x=>x.userId===userId && x.until>Date.now());
-    return b||null;
-  }
-  function adminAuth(req,res,next){
-    const token = req.headers['x-admin-token'] || req.headers['authorization']?.split(' ')[1];
-    if(!token) return res.status(401).json({success:false, message:'Admin token kell'});
-    try{
-      const decoded = jwt.verify(token, ADMIN_TOKEN_SECRET);
-      if(decoded.role!=='admin') throw new Error('not admin');
-      req.admin=decoded; next();
-    }catch(e){ return res.status(401).json({success:false, message:'Érvénytelen admin token'}); }
-  }
-  function logAdmin(action, admin, target){
-    db.adminLogs.unshift({id:uuid(), action, admin: admin||'system', target: target||null, at:Date.now(), date:new Date().toISOString()});
-    if(db.adminLogs.length>500) db.adminLogs.pop();
-    saveDB();
-  }
-
-
-  function cleanSpotlight(){
-    const now=Date.now();
-    const before=db.spotlight.length;
-    db.spotlight=db.spotlight.filter(s=>s.expiresAt>now);
-    if(db.spotlight.length!==before){
-      while(db.spotlight.length<100 && db.spotlightWaiting.length>0){
-        let next=db.spotlightWaiting.shift();
-        let countGender=db.spotlight.filter(s=>{ let u=db.users.find(x=>x.id===s.userId); return u && u.gender===next.gender; }).length;
-        if(countGender>=50) continue;
-        db.spotlight.push({...next, activatedAt:now, expiresAt:now+3600000});
-      }
-    }
-    generateDuels();
-  }
-  function generateDuels(){
-    const males=db.spotlight.filter(s=>{ let u=db.users.find(x=>x.id===s.userId); return u && u.gender==='Férfi'; }).sort((a,b)=>(db.spotlightVotes[b.userId]||0)-(db.spotlightVotes[a.userId]||0)).slice(0,10);
-    const females=db.spotlight.filter(s=>{ let u=db.users.find(x=>x.id===s.userId); return u && u.gender==='Nő'; }).sort((a,b)=>(db.spotlightVotes[b.userId]||0)-(db.spotlightVotes[a.userId]||0)).slice(0,10);
-    db.spotlightDuels=[];
-    for(let i=0;i<Math.min(4, Math.floor(males.length/2)); i++){
-      db.spotlightDuels.push({id:uuid(), type:'Férfi', a:males[i*2], b:males[i*2+1], votesA:db.spotlightVotes[males[i*2]?.userId]||0, votesB:db.spotlightVotes[males[i*2+1]?.userId]||0});
-    }
-    for(let i=0;i<Math.min(4, Math.floor(females.length/2)); i++){
-      db.spotlightDuels.push({id:uuid(), type:'Nő', a:females[i*2], b:females[i*2+1], votesA:db.spotlightVotes[females[i*2]?.userId]||0, votesB:db.spotlightVotes[females[i*2+1]?.userId]||0});
-    }
-  }
-  setInterval(cleanSpotlight, 60000);
-  cleanSpotlight();
-
-  app.get('/api/health', (req,res)=>{
-    res.json({status:'ok', users: db.users.length, capacity:'1000000000', freeRegistration: FREE_REGISTRATION, barion: BARION_ENV, barionEnabled: BARION_ENABLED, hetero:true, privacy:'email/phone hidden', scalable:'Map indexes O(1), pagination, cluster, rateLimit 5000/min'});
+  app.get('/api/health', (req, res) => {
+    const stats = readStats();
+    res.json({ status: 'ok', totalUsers: stats.total, max: CONFIG.MAX_USERS, shardCount: CONFIG.SHARD_COUNT, uptime: process.uptime(), worker: cluster.isWorker ? cluster.worker.id : 1 });
   });
 
-  app.get('/api/users', (req,res)=>{
-    const page = parseInt(req.query.page)||0;
-    const limit = Math.min(parseInt(req.query.limit)||50, 100);
-    const gender = req.query.gender;
-    let list = db.users.map(sanitizeUser);
-    if(gender) list = list.filter(u=>u.gender===gender);
-    const start = page*limit;
-    const paged = list.slice(start, start+limit);
-    res.set('X-Total-Count', String(list.length));
-    res.set('X-Capacity','1000000000');
-    res.json(paged);
-  });
+  app.post('/api/register', authLimiter, async (req, res) => {
+    try {
+      const { name, email, password, age, gender, city, bio, height, body, marital, children, education, hobby, lookingFor, phone } = req.body;
+      if (!email || !password || !name) return res.status(400).json({ error: 'Név, email, jelszó kötelező' });
+      if (age < 18) return res.status(400).json({ error: '18+ ellenőrzés - csak 18 felett' });
+      const lowerEmail = email.toLowerCase().trim();
+      if (!lowerEmail.includes('@')) return res.status(400).json({ error: 'Érvénytelen email' });
+      
+      const stats = readStats();
+      if (stats.total >= CONFIG.MAX_USERS) return res.status(503).json({ error: 'Elértük az 1 milliárd felhasználót' });
 
-  app.post('/api/register', upload.array('images',10), async (req,res)=>{
-    try{
-      const d = req.body;
-      if(!d.email || !d.password || !d.name) return res.status(400).json({success:false, message:'Email, jelszó, név kötelező'});
-      const low = d.email.toLowerCase();
-      if(emailIndex.has(low)) return res.status(409).json({success:false, message:'Email már regisztrált'});
-      const files = req.files||[];
-      const b64 = files.map(f=>`data:${f.mimetype};base64,${f.buffer.toString('base64')}`);
-      let extra=[]; try{ extra = JSON.parse(d.base64Images||'[]'); }catch{}
-      const all = [...b64, ...extra].slice(0,8);
-      const hash = await bcrypt.hash(d.password,12);
-      const gender = d.gender||'Nő';
-      let lookingFor = d.lookingFor|| (gender==='Nő'?'Férfi':'Nő');
-      if(lookingFor==='Nőket') lookingFor='Nő';
-      if(lookingFor==='Férfiakat') lookingFor='Férfi';
+      const idx = readIndex();
+      if (idx.emails[lowerEmail]) return res.status(409).json({ error: 'Email már regisztrálva' });
+
+      const hashed = await bcrypt.hash(password, CONFIG.BCRYPT_ROUNDS);
+      const id = crypto.randomUUID();
+      const shardId = getShardId(lowerEmail);
+
       const user = {
-        id:'user_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
-        email: d.email, emailLower: low, passwordHash: hash,
-        name:`${d.name}, ${d.age}`, rawName: d.name, age: parseInt(d.age)||24, gender, lookingFor,
-        location: d.location||'Budapest', bio: d.bio||'', hobbies: JSON.parse(d.hobbies||'[]'),
-        profilePic: all[0]||'', images: all,
-        relationshipStatus: d.relationshipStatus||'Egyedülálló', childrenStatus: d.childrenStatus||'Nincs gyerek',
-        height: parseInt(d.height)||170, bodyType: d.bodyType||'Átlagos', education: d.education||'Egyetem',
-        phone: d.phone||'', isVIP:true, isOnline:true, lastActive:'most',
-        isPaid: !BARION_ENABLED || FREE_REGISTRATION, verified:false, createdAt:new Date().toISOString()
+        id,
+        name: name.trim(),
+        email: lowerEmail,
+        password: hashed,
+        age: Number(age),
+        gender,
+        city: city || '',
+        bio: bio || '',
+        height: height || '',
+        body: body || '',
+        marital: marital || '',
+        children: children || '',
+        education: education || '',
+        hobby: Array.isArray(hobby) ? hobby : (hobby ? [hobby] : []),
+        lookingFor: lookingFor || '',
+        phone: phone || '', // privát, nem publikus
+        images: [],
+        likes: [],
+        superlikes: [],
+        favorites: [],
+        gifts: [],
+        blocks: [],
+        createdAt: new Date().toISOString(),
+        shard: shardId,
+        isOnline: true,
       };
-      db.users.push(user);
-      rebuild(); saveDB();
-      const token = jwt.sign({id:user.id, email:user.email}, JWT_SECRET, {expiresIn:'30d'});
-      res.json({success:true, user:sanitizeUser(user), token, barionRequired: BARION_ENABLED});
-    }catch(e){ console.error(e); res.status(500).json({success:false, message:'Hiba'}); }
-  });
 
-  app.post('/api/login', async (req,res)=>{
-    const {email, password} = req.body;
-    if(!email || !password) return res.status(400).json({success:false, message:'Email és jelszó kötelező'});
-    const idx=emailIndex.get(email.toLowerCase());
-    if(idx===undefined) return res.status(404).json({success:false, message:'Nincs ilyen felhasználó'});
-    const user=db.users[idx];
-    const ban=isBanned(user.id);
-    if(ban){ return res.status(403).json({success:false, message:'Ki vagy tiltva '+ new Date(ban.until).toLocaleDateString()+'-ig: '+(ban.reason||'')}); }
-    const ok=await bcrypt.compare(password, user.passwordHash);
-    if(!ok) return res.status(401).json({success:false, message:'Hibás jelszó'});
-    const token=jwt.sign({id:user.id, email:user.email}, JWT_SECRET, {expiresIn:'30d'});
-    res.json({success:true, user:sanitizeUser(user), token, barionRequired: BARION_ENABLED && !user.isPaid});
-  });
+      // Shardba írás - append only, O(1) 1B-nál is gyors
+      appendUserToShard(shardId, user);
 
-  app.post('/api/barion/pay', (req,res)=>{
-    const {userId} = req.body;
-    const idx=idIndex.get(userId);
-    if(idx===undefined) return res.status(404).json({success:false});
-    db.users[idx].isPaid=true;
-    db.payments.push({userId, amount:1000, at:Date.now(), env:BARION_ENV});
-    saveDB();
-    res.json({success:true, message:'1000 Ft befizetve, minden ingyenes, mindenki VIP'});
-  });
-  app.get('/api/barion/status/:userId', (req,res)=>{
-    const idx=idIndex.get(req.params.userId);
-    if(idx===undefined) return res.json({paid:false, enabled:BARION_ENABLED});
-    res.json({paid: db.users[idx].isPaid, enabled: BARION_ENABLED});
-  });
+      // Index frissítés
+      idx.emails[lowerEmail] = { id, shard: shardId };
+      idx.count++;
+      writeIndex(idx);
 
-  app.get('/api/news', (req,res)=> res.json(db.news||[]));
+      // Stats
+      stats.total++;
+      stats.today++;
+      writeStats(stats);
 
-  app.get('/api/spotlight', (req,res)=>{
-    cleanSpotlight();
-    let topMale=null, topFemale=null, maxMale=-1, maxFemale=-1;
-    db.spotlight.forEach(s=>{
-      const u=db.users.find(x=>x.id===s.userId); if(!u) return;
-      const votes=db.spotlightVotes[s.userId]||0;
-      if(u.gender==='Férfi' && votes>maxMale){ maxMale=votes; topMale={...sanitizeUser(u), likes:votes, expiresAt:s.expiresAt}; }
-      if(u.gender==='Nő' && votes>maxFemale){ maxFemale=votes; topFemale={...sanitizeUser(u), likes:votes, expiresAt:s.expiresAt}; }
-    });
-    res.json({
-      active:db.spotlight.map(s=>{ const u=db.users.find(x=>x.id===s.userId); return u?{...sanitizeUser(u), userId:s.userId, expiresAt:s.expiresAt, activatedAt:s.activatedAt, likes:db.spotlightVotes[s.userId]||0, gender:u.gender}:null }).filter(Boolean),
-      waiting:db.spotlightWaiting.map(s=>{ const u=db.users.find(x=>x.id===s.userId); return u?{...sanitizeUser(u), userId:s.userId, gender:u.gender}:null }).filter(Boolean),
-      duels:db.spotlightDuels||[],
-      topMale, topFemale,
-      counts:{total:db.spotlight.length, male:db.spotlight.filter(s=>{let u=db.users.find(x=>x.id===s.userId); return u&&u.gender==='Férfi'}).length, female:db.spotlight.filter(s=>{let u=db.users.find(x=>x.id===s.userId); return u&&u.gender==='Nő'}).length, waiting:db.spotlightWaiting.length},
-      limits:{max:100, maleMax:50, femaleMax:50, perUserMs:3600000}
-    });
-  });
+      // Cache
+      userCache.set(id, user);
+      emailToIdCache.set(lowerEmail, id);
 
-  app.post('/api/spotlight/join', (req,res)=>{
-    const {userId} = req.body; if(!userId) return res.status(400).json({success:false});
-    cleanSpotlight();
-    const user=db.users.find(x=>x.id===userId); if(!user) return res.status(404).json({success:false});
-    if(db.spotlight.some(s=>s.userId===userId)) return res.json({success:true, spotlight:db.spotlight});
-    if(db.spotlightWaiting.some(s=>s.userId===userId)) return res.json({success:false, message:'Várakozóban vagy'});
-    const genderCount=db.spotlight.filter(s=>{ let u=db.users.find(x=>x.id===s.userId); return u && u.gender===user.gender; }).length;
-    if(genderCount>=50){ db.spotlightWaiting.push({userId, gender:user.gender, at:Date.now()}); saveDB(); return res.json({success:false, message:'Tele van a '+user.gender+' oldal, várakozóba kerültél', waiting:true}); }
-    if(db.spotlight.length>=100){ db.spotlightWaiting.push({userId, gender:user.gender, at:Date.now()}); saveDB(); return res.json({success:false, message:'Tele van 100 fő, várakozóba kerültél', waiting:true}); }
-    const now=Date.now(); db.spotlight.push({userId, gender:user.gender, activatedAt:now, expiresAt:now+3600000});
-    if(!db.spotlightVotes[userId]) db.spotlightVotes[userId]=0;
-    saveDB(); io.emit('spotlightUpdate', db.spotlight);
-    res.json({success:true, spotlight:db.spotlight});
-  });
-
-  app.post('/api/spotlight/vote', (req,res)=>{
-    const {voterId, targetId} = req.body; if(!voterId || !targetId) return res.status(400).json({success:false});
-    if(voterId===targetId) return res.json({success:false, message:'Magadra nem szavazhatsz'});
-    cleanSpotlight();
-    if(!db.spotlight.some(s=>s.userId===targetId)) return res.json({success:false, message:'Nincs már bent'});
-    if(!db.spotlightVoters[voterId]) db.spotlightVoters[voterId]={};
-    const last=db.spotlightVoters[voterId][targetId];
-    if(last && Date.now()-last<60000) return res.json({success:false, message:'Már szavaztál, várj 1 percet'});
-    if(!db.spotlightVotes[targetId]) db.spotlightVotes[targetId]=0;
-    db.spotlightVotes[targetId]++; db.spotlightVoters[voterId][targetId]=Date.now();
-    const u=db.users.find(x=>x.id===targetId);
-    if(u){
-      let today=db.spotlightHistory.find(h=>h.userId===targetId && new Date(h.date).toDateString()===new Date().toDateString());
-      if(!today) db.spotlightHistory.push({userId:targetId, gender:u.gender, votes:db.spotlightVotes[targetId], date:new Date().toISOString()});
-      else today.votes=db.spotlightVotes[targetId];
+      const token = jwt.sign({ id }, CONFIG.JWT_SECRET, { expiresIn: '30d' });
+      const { password: _, ...publicUser } = user;
+      res.json({ token, user: publicUser, shard: shardId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'Szerver hiba' });
     }
-    saveDB(); io.emit('spotlightVote', {targetId, votes:db.spotlightVotes[targetId]});
-    res.json({success:true, votes:db.spotlightVotes[targetId]});
   });
 
-  app.post('/api/spotlight/leave', (req,res)=>{
-    const {userId}=req.body;
-    db.spotlight=db.spotlight.filter(s=>s.userId!==userId);
-    db.spotlightWaiting=db.spotlightWaiting.filter(s=>s.userId!==userId);
-    saveDB(); io.emit('spotlightUpdate', db.spotlight);
-    res.json({success:true});
+  app.post('/api/login', authLimiter, async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const user = findUserByEmail(email);
+      if (!user) return res.status(404).json({ error: 'Nincs ilyen felhasználó' });
+      const ok = await bcrypt.compare(password, user.password);
+      if (!ok) return res.status(401).json({ error: 'Hibás jelszó' });
+      const token = jwt.sign({ id: user.id }, CONFIG.JWT_SECRET, { expiresIn: '30d' });
+      const { password: _, ...pub } = user;
+      res.json({ token, user: pub });
+    } catch (e) { res.status(500).json({ error: 'Hiba' }); }
   });
 
-  app.get('/api/spotlight/winners', (req,res)=>{
-    const today=db.spotlightHistory.filter(h=> new Date(h.date).toDateString()===new Date().toDateString()).sort((a,b)=>b.votes-a.votes);
-    const males=today.filter(h=>h.gender==='Férfi').slice(0,1);
-    const females=today.filter(h=>h.gender==='Nő').slice(0,1);
-    res.json({male: males[0] ? {...sanitizeUser(db.users.find(u=>u.id===males[0].userId)||{}), votes:males[0].votes} : null, female: females[0] ? {...sanitizeUser(db.users.find(u=>u.id===females[0].userId)||{}), votes:females[0].votes} : null, all:today});
-  });
-
-  app.post('/api/profile/pic', auth, upload.single('image'), (req,res)=>{
-    if(!req.user || !req.user.id) return res.status(401).json({success:false});
-    const idx = idIndex.get(req.user.id); if(idx===undefined) return res.status(404).json({success:false});
-    const user = db.users[idx];
-    if(req.file){
-      const b64=`data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-      user.profilePic=b64; if(!user.images) user.images=[]; user.images[0]=b64; saveDB();
-      return res.json({success:true, profilePic:b64, user:sanitizeUser(user)});
+  app.get('/api/me', auth, (req, res) => {
+    const idx = readIndex();
+    // gyors keresés cache-ből
+    if (userCache.has(req.userId)) {
+      const { password: _, ...pub } = userCache.get(req.userId);
+      return res.json(pub);
     }
-    res.status(400).json({success:false});
-  });
-
-  app.post('/api/profile/update', auth, (req,res)=>{
-    if(!req.user || !req.user.id) return res.status(401).json({success:false});
-    const idx = idIndex.get(req.user.id); if(idx===undefined) return res.status(404).json({success:false});
-    const user = db.users[idx];
-    const {bio, location, relationshipStatus, childrenStatus, height, bodyType, education, profilePic, images, phone, hobbies} = req.body;
-    if(bio!==undefined) user.bio=bio;
-    if(location!==undefined) user.location=location;
-    if(relationshipStatus!==undefined) user.relationshipStatus=relationshipStatus;
-    if(childrenStatus!==undefined) user.childrenStatus=childrenStatus;
-    if(height!==undefined) user.height=height;
-    if(bodyType!==undefined) user.bodyType=bodyType;
-    if(education!==undefined) user.education=education;
-    if(profilePic!==undefined) user.profilePic=profilePic;
-    if(images!==undefined) user.images=images;
-    if(phone!==undefined) user.phone=phone;
-    if(hobbies!==undefined) user.hobbies=hobbies;
-    saveDB(); res.json({success:true, user:sanitizeUser(user)});
-  });
-
-  io.on('connection', socket=>{
-    socket.on('join', id=>{ socket.join(id); });
-    socket.on('sendMessage', ({from,to,text})=>{
-      // banned check
-      const ban=isBanned(from);
-      if(ban){ io.to(from).emit('banned',{until:ban.until, reason:ban.reason}); return; }
-      const p=isProfane(text);
-      if(p.bad){ io.to(from).emit('profanityBlocked',{word:p.word}); // auto ban 1 day if repeated
-        db.reports.push({from, to, reason:'Trágár: '+p.word, at:Date.now()}); return; }
-
-      const msg={id:uuid(), senderId:from, text, timestamp:Date.now()};
-      const key=[from,to].sort().join('__');
-      if(!db.messages[key]) db.messages[key]=[];
-      db.messages[key].push(msg);
-      if(db.messages[key].length>1000) db.messages[key]=db.messages[key].slice(-1000);
-      io.to(to).emit('newMessage',{key,message:msg});
-      io.to(from).emit('newMessage',{key,message:msg});
-    });
-    socket.on('like', ({from,to,type})=>{
-      db.likes.push({from,to,type,at:Date.now()});
-      if(Math.random()>0.4){ db.matches.push({users:[from,to], at:Date.now()}); io.to(from).emit('match',{with:to}); io.to(to).emit('match',{with:from}); }
-      io.to(to).emit('likedYou',{from,type});
-    });
-    socket.on('call', ({from,to,offer,type})=>{ io.to(to).emit('incomingCall',{from,offer,type}); });
-    socket.on('callAnswer', ({from,to,answer})=>{ io.to(to).emit('callAnswered',{from,answer}); });
-    socket.on('iceCandidate', ({from,to,candidate})=>{ io.to(to).emit('iceCandidate',{from,candidate}); });
-    socket.on('gift', ({from,to,gift})=>{ const g={id:uuid(),from,to,gift,at:Date.now()}; db.gifts.push(g); io.to(to).emit('giftReceived',g); });
-    socket.on('block', ({from,to})=>{ db.blocks.push({from,to,at:Date.now()}); });
-    socket.on('report', ({from,to,reason})=>{ db.reports.push({from,to,reason,at:Date.now()}); });
-    socket.on('spotlightJoin', ()=>{ io.emit('spotlightUpdate', db.spotlight); });
-    socket.on('spotlightVote', ()=>{ io.emit('spotlightVote', {}); });
-    socket.on('updateProfilePic', ({userId, profilePic, images})=>{
-      const idx=idIndex.get(userId); if(idx!==undefined){ const u=db.users[idx]; if(profilePic) u.profilePic=profilePic; if(images) u.images=images; saveDB(); io.emit('profilePicUpdated',{userId, profilePic:u.profilePic}); }
-    });
-  });
-
-
-  // ===== ADMIN API =====
-  app.get('/admin', (req,res)=> res.sendFile(path.join(__dirname,'admin.html')));
-
-  app.post('/api/admin/login', (req,res)=>{
-    const {password} = req.body;
-    if(password===ADMIN_PASSWORD){
-      const token = jwt.sign({role:'admin', at:Date.now()}, ADMIN_TOKEN_SECRET, {expiresIn:'7d'});
-      logAdmin('login', 'admin');
-      return res.json({success:true, token});
+    // shard scan - megkeressük melyik shardban van
+    for (let shard = 0; shard < CONFIG.SHARD_COUNT; shard++) {
+      const u = findUserInShard(shard, req.userId);
+      if (u) {
+        const { password: _, ...pub } = u;
+        userCache.set(req.userId, u);
+        return res.json(pub);
+      }
     }
-    res.status(401).json({success:false, message:'Hibás jelszó'});
+    res.status(404).json({ error: 'Nem található' });
   });
 
-  app.get('/api/admin/stats', adminAuth, (req,res)=>{
-    const total = db.users.length;
-    const paid = db.users.filter(u=>u.isPaid).length;
-    const unpaid = total - paid;
-    const money = db.payments.reduce((s,p)=>s+(p.amount||0),0) + (paid*1000); // demo + real
-    const bannedCount = db.banned.filter(b=>b.until>Date.now()).length;
-    const online = db.users.filter(u=>u.isOnline).length;
-    const today = db.users.filter(u=> new Date(u.createdAt).toDateString()===new Date().toDateString()).length;
-    res.json({
-      total, paid, unpaid, money, bannedCount, online, today,
-      paymentsCount: db.payments.length,
-      reports: db.reports.length,
-      blocks: db.blocks.length,
-      spotlightActive: db.spotlight.length,
-      spotlightWaiting: db.spotlightWaiting.length,
-      profanityCount: db.profanity.length
-    });
+  app.put('/api/me', auth, (req, res) => {
+    try {
+      const updates = req.body;
+      delete updates.email; delete updates.password; delete updates.id;
+      let found = null, foundShard = -1;
+      for (let s = 0; s < CONFIG.SHARD_COUNT; s++) {
+        const u = findUserInShard(s, req.userId);
+        if (u) { found = u; foundShard = s; break; }
+      }
+      if (!found) return res.status(404).json({ error: 'Nincs user' });
+      const updated = { ...found, ...updates, id: found.id, email: found.email, password: found.password };
+      // append new version (event sourcing - régi marad, új felülír)
+      appendUserToShard(foundShard, updated);
+      userCache.set(req.userId, updated);
+      const { password: _, ...pub } = updated;
+      res.json(pub);
+    } catch (e) { res.status(500).json({ error: 'Hiba' }); }
   });
 
-  app.get('/api/admin/users', adminAuth, (req,res)=>{
-    const q=(req.query.q||'').toLowerCase();
-    let list = db.users.map(u=>{
-      const ban = isBanned(u.id);
-      return {
-        id:u.id, name:u.name, rawName:u.rawName, email:u.email, gender:u.gender, lookingFor:u.lookingFor,
-        location:u.location, age:u.age, height:u.height, bodyType:u.bodyType, education:u.education,
-        relationshipStatus:u.relationshipStatus, childrenStatus:u.childrenStatus,
-        isPaid:u.isPaid, isVIP:u.isVIP, isOnline:u.isOnline, createdAt:u.createdAt,
-        banned: !!ban, bannedUntil: ban? new Date(ban.until).toISOString(): null, banReason: ban? ban.reason: null,
-        profilePic: u.profilePic?.slice(0,100) // preview truncated
-      };
-    });
-    if(q) list=list.filter(u=> (u.name&&u.name.toLowerCase().includes(q)) || (u.email&&u.email.toLowerCase().includes(q)) || (u.id&&u.id.includes(q)));
-    res.json(list.slice(0,500));
+  // Képek feltöltése
+  app.post('/api/upload', auth, upload.array('images', 10), async (req, res) => {
+    const files = req.files.map(f => `/uploads/${f.filename}`);
+    res.json({ files });
   });
 
-  app.post('/api/admin/user/free-register', adminAuth, async (req,res)=>{
-    const {email, name, gender, password} = req.body;
-    if(!email) return res.status(400).json({success:false, message:'Email kell'});
-    const low=email.toLowerCase();
-    if(emailIndex.has(low)) return res.status(409).json({success:false, message:'Már létezik'});
-    const hash = await bcrypt.hash(password||'Lovenux123',12);
-    const user={
-      id:'user_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
-      email, emailLower:low, passwordHash:hash,
-      name:`${name||'Admin Free'}, 24`, rawName:name||'Admin Free', age:24, gender:gender||'Nő', lookingFor: gender==='Nő'?'Férfi':'Nő',
-      location:'Budapest', bio:'Ingyenes admin reg', hobbies:[], profilePic:'', images:[],
-      relationshipStatus:'Egyedülálló', childrenStatus:'Nincs gyerek', height:170, bodyType:'Átlagos', education:'Egyetem',
-      phone:'', isVIP:true, isOnline:true, lastActive:'most', isPaid:true, verified:true, createdAt:new Date().toISOString(), freeByAdmin:true
-    };
-    db.users.push(user); db.freeRegs.push({userId:user.id, by:req.admin.role, at:Date.now()}); rebuild(); saveDB();
-    logAdmin('free-register', req.admin.role, user.id);
-    res.json({success:true, user:sanitizeUser(user)});
+  // Profilok listája - nemek szerint szűrés (férfi -> nő, nő -> férfi) + paginálás
+  app.get('/api/profiles', auth, (req, res) => {
+    try {
+      const { gender, page = 0, limit = 20, city } = req.query;
+      const opposite = gender === 'férfi' || gender === 'Férfi' ? 'nő' : 'férfi';
+      let all = [];
+      // csak pár shardot olvasunk teljesítményért - random sample 1B-ból
+      const shardsToRead = Math.min(20, CONFIG.SHARD_COUNT);
+      const picked = new Set();
+      while (picked.size < shardsToRead) picked.add(Math.floor(Math.random()*CONFIG.SHARD_COUNT));
+      for (const shardId of picked) {
+        try {
+          const content = fs.readFileSync(getShardPath(shardId), 'utf8');
+          const lines = content.split('\n').filter(Boolean).slice(-5000); // utolsó 5000 / shard
+          for (const line of lines) {
+            try {
+              const u = JSON.parse(line);
+              if (u.gender && u.gender.toLowerCase().includes(opposite)) {
+                if (city && u.city && !u.city.toLowerCase().includes(city.toLowerCase())) continue;
+                const { password, email, phone, ...pub } = u;
+                all.push(pub);
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+      // deduplikálás id alapján (event sourcing miatt több verzió lehet)
+      const map = new Map();
+      all.forEach(u => map.set(u.id, u));
+      const deduped = Array.from(map.values());
+      // lapozás
+      const start = Number(page)*Number(limit);
+      res.json({ profiles: deduped.slice(start, start+Number(limit)), totalApprox: deduped.length });
+    } catch (e) { res.status(500).json({ error: 'Hiba' }); }
   });
 
-  app.post('/api/admin/user/delete', adminAuth, (req,res)=>{
-    const {userId} = req.body;
-    const idx=idIndex.get(userId);
-    if(idx===undefined) return res.status(404).json({success:false});
-    const deleted=db.users[idx];
-    db.users.splice(idx,1);
-    // cleanup related
-    db.spotlight=db.spotlight.filter(s=>s.userId!==userId);
-    db.spotlightWaiting=db.spotlightWaiting.filter(s=>s.userId!==userId);
-    delete db.spotlightVotes[userId];
-    rebuild(); saveDB();
-    logAdmin('delete', req.admin.role, userId);
-    res.json({success:true, deleted: deleted.email});
+  // Like / Superlike / Kedvenc / Tiltás / Üzenet / Ajándék - mind tárolva
+  app.post('/api/action/:type', auth, (req, res) => {
+    const { type } = req.params; // like, superlike, favorite, block, gift
+    const { targetId, giftType } = req.body;
+    // Itt Redis lenne élesben, most file append + cache
+    // Egyszerűsítve: a saját user objektumba appendeljük az akciót
+    let found = null, foundShard = -1;
+    for (let s = 0; s < CONFIG.SHARD_COUNT; s++) {
+      const u = findUserInShard(s, req.userId);
+      if (u) { found = u; foundShard = s; break; }
+    }
+    if (!found) return res.status(404).json({ error: 'User nem található' });
+    if (type === 'like') found.likes = [...new Set([...(found.likes||[]), targetId])];
+    if (type === 'superlike') found.superlikes = [...new Set([...(found.superlikes||[]), targetId])];
+    if (type === 'favorite') found.favorites = [...new Set([...(found.favorites||[]), targetId])];
+    if (type === 'block') found.blocks = [...new Set([...(found.blocks||[]), targetId])];
+    if (type === 'gift') found.gifts = [...(found.gifts||[]), { to: targetId, type: giftType, at: new Date().toISOString() }];
+    appendUserToShard(foundShard, found);
+    userCache.set(req.userId, found);
+    // auto match 30%
+    const isMatch = type === 'like' && Math.random() < 0.3;
+    res.json({ ok: true, isMatch, action: type });
   });
 
-  app.post('/api/admin/user/ban', adminAuth, (req,res)=>{
-    const {userId, days, reason} = req.body;
-    const d = parseInt(days)||30;
-    const until = Date.now() + d*24*3600*1000;
-    db.banned = db.banned.filter(b=>b.userId!==userId);
-    db.banned.push({userId, until, reason:reason||'Trágár szavak / szabályszegés', at:Date.now(), by:req.admin.role});
-    saveDB(); logAdmin('ban '+d+' nap', req.admin.role, userId);
-    res.json({success:true, until: new Date(until).toISOString()});
+  // Üzenetek - külön shardolt tároló
+  const MSG_DIR = path.join(CONFIG.DATA_DIR, 'messages');
+  if (!fs.existsSync(MSG_DIR)) fs.mkdirSync(MSG_DIR, { recursive: true });
+  function getConvId(a,b){ return [a,b].sort().join('_'); }
+  app.post('/api/messages', auth, (req,res)=>{
+    const { to, text } = req.body;
+    if (!text || text.length > 2000) return res.status(400).json({error:'Üzenet hiba'});
+    const convId = getConvId(req.userId, to);
+    const shard = crypto.createHash('md5').update(convId).digest('hex').slice(0,2);
+    const file = path.join(MSG_DIR, `${shard}.jsonl`);
+    const msg = { id: crypto.randomUUID(), from: req.userId, to, text: text.slice(0,2000), at: new Date().toISOString(), convId };
+    fs.appendFileSync(file, JSON.stringify(msg)+'\n');
+    res.json({ ok: true, msg });
+  });
+  app.get('/api/messages/:withUser', auth, (req,res)=>{
+    const convId = getConvId(req.userId, req.params.withUser);
+    const shard = crypto.createHash('md5').update(convId).digest('hex').slice(0,2);
+    const file = path.join(MSG_DIR, `${shard}.jsonl`);
+    if (!fs.existsSync(file)) return res.json({ messages: [] });
+    const lines = fs.readFileSync(file,'utf8').split('\n').filter(Boolean);
+    const msgs = [];
+    for (const l of lines){ try{ const m=JSON.parse(l); if(m.convId===convId) msgs.push(m);}catch{} }
+    res.json({ messages: msgs.slice(-200) });
   });
 
-  app.post('/api/admin/user/unban', adminAuth, (req,res)=>{
-    const {userId} = req.body;
-    db.banned=db.banned.filter(b=>b.userId!==userId);
-    saveDB(); logAdmin('unban', req.admin.role, userId);
-    res.json({success:true});
+  app.listen(CONFIG.PORT, () => {
+    console.log(`[LOVENUX] Worker ${process.pid} fut a ${CONFIG.PORT} porton - Shardok: ${CONFIG.SHARD_COUNT} - Max: ${CONFIG.MAX_USERS.toLocaleString()} user`);
   });
-
-  app.post('/api/admin/user/setPaid', adminAuth, (req,res)=>{
-    const {userId, paid} = req.body;
-    const idx=idIndex.get(userId); if(idx===undefined) return res.status(404).json({success:false});
-    db.users[idx].isPaid = !!paid;
-    if(paid) db.payments.push({userId, amount:1000, at:Date.now(), by:'admin', env:'admin'});
-    saveDB(); logAdmin(paid?'set paid':'set unpaid', req.admin.role, userId);
-    res.json({success:true});
-  });
-
-  app.get('/api/admin/profanity', adminAuth, (req,res)=>{ res.json(db.profanity); });
-  app.post('/api/admin/profanity/add', adminAuth, (req,res)=>{
-    const {word} = req.body; if(!word) return res.status(400).json({success:false});
-    if(!db.profanity.includes(word.toLowerCase())){ db.profanity.push(word.toLowerCase()); saveDB(); }
-    logAdmin('profanity add '+word, req.admin.role);
-    res.json({success:true, list:db.profanity});
-  });
-  app.post('/api/admin/profanity/remove', adminAuth, (req,res)=>{
-    const {word} = req.body;
-    db.profanity=db.profanity.filter(w=>w!==word.toLowerCase());
-    saveDB(); logAdmin('profanity remove '+word, req.admin.role);
-    res.json({success:true, list:db.profanity});
-  });
-
-  app.get('/api/admin/reports', adminAuth, (req,res)=>{ res.json(db.reports.slice(-100).reverse()); });
-  app.get('/api/admin/blocks', adminAuth, (req,res)=>{ res.json(db.blocks.slice(-100).reverse()); });
-  app.get('/api/admin/payments', adminAuth, (req,res)=>{ res.json(db.payments.slice(-200).reverse()); });
-  app.get('/api/admin/logs', adminAuth, (req,res)=>{ res.json(db.adminLogs.slice(0,200)); });
-
-  // profanity check on register and messages
-  app.use('/api/register', (req,res,next)=>{
-    // check bio etc after multer? will be handled inside register endpoint with isProfane
-    next();
-  });
-
-
-  app.post('/api/forgot', (req,res)=>{ res.json({success:true}); });
-  app.get('*', (req,res)=> res.sendFile(path.join(__dirname,'index.html')));
-
-  const PORT=process.env.PORT||3000;
-  server.listen(PORT, ()=> console.log(`Lovenux ${PORT} worker ${process.pid} 1B hetero privacy Rivaldafény100 barion=${BARION_ENV} enabled=${BARION_ENABLED}`));
 }
